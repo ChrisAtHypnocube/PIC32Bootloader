@@ -230,6 +230,8 @@ error! need defines for your chip
 /*********************** Notes *************************************************
  * TODO - check all TODOs :)
  *
+ * todo - errors allowed from flash side - mention which
+ *
  * TODO - clean this section, organize, split
  * Original idea to make a boot flash bootloader is fraught with problems:
  *  1. Boot flash is small, 3K = 0xD00, on many PICs
@@ -1581,6 +1583,10 @@ BOOT_CODE static void BootCommandErase(Boot_t * bs)
     // todo - if ever set up so no errors on a correct erase, then
     // make this only set to true during success
     bs->flashErased = true;
+
+    BOOTSTRING(eraseText01,"Erase finished");
+    BootPrintSerial(eraseText01);
+    ENDLINE();
 
     // one final ack or nack based on success
     if (bs->pageEraseFailureCount != 0)
