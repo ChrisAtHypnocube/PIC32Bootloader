@@ -49,6 +49,11 @@ namespace Hypnocube.PICFlasher
             // remove any that are now zero length
             flashBlocks = flashBlocks.Where(b => b.Data.Count > 0).ToList();
 
+            // if going to be encrypted, may as well
+            // permute block order
+            if (key != null)
+                PermuteBlocks(picDef,flashBlocks);
+
             // convert the flash blocks into an image file
             var image = PackImage(picDef, flashBlocks);
 
@@ -392,11 +397,6 @@ namespace Hypnocube.PICFlasher
 
         void EncryptImage(Image image, uint[]userKey)
         {
-            // secure permutation of blocks
-            // must be done before encryption
-            // PermuteBlocks(image.Blocks);
-            FlasherInterface.WriteLine(FlasherMessageType.Error,"TODO: permute blocks");
-
             var initializationVector = ChaCha.CreateIVOrKey(8);
             var encryptor = new ChaCha();
 
@@ -428,8 +428,9 @@ namespace Hypnocube.PICFlasher
             image.Blocks.Insert(0,cryptoBlock);
         }
 
-        private void PermuteBlocks(List<byte[]> list)
+        private void PermuteBlocks(PicDefs.PicDef picDef, List<FlashBlock> list)
         {
+            FlasherInterface.WriteLine(FlasherMessageType.Info,"Randomly permuting blocks...");
             using (var cryptoRng = new RNGCryptoServiceProvider())
             {
                 // standard Fischer-Yates shuffle
@@ -441,13 +442,42 @@ namespace Hypnocube.PICFlasher
                     list[i] = list[j];
                     list[j] = temp;
                 }
+
+                // bootloader needs the first BOOT FLASH page to come first out 
+                // of all boot flash pages, so find it if it exists, and swap with 
+                // the first
+
+                var bootBlocks =
+                    list.Where(b => picDef.BootStart <= b.Address && b.Address < picDef.BootStart + picDef.BootSize)
+                        .ToList();
+                var firstBootIndex = list.IndexOf(list.FirstOrDefault(b=>b.Address == picDef.BootStart));
+
+                if (bootBlocks.Any() && firstBootIndex != -1)
+                {
+                    var minIndex = bootBlocks.Min(b=>list.IndexOf(b));
+                    if (firstBootIndex > minIndex)
+                    {
+                        // needs swapped
+                        var temp = list[firstBootIndex];
+                        list[firstBootIndex] = list[minIndex];
+                        list[minIndex] = temp;
+                        FlasherInterface.WriteLine("Swapped blocks {0} and {1}", firstBootIndex, minIndex);
+                    }
+                }
             }
-            
+
+
             // this should force a fix - just swap the boot entry to the first 
             // such page
-            throw new Exception("todo - cannot scramble writes to boot pages - lowest erases page");
 
             FlasherInterface.WriteLine("Crypto stats: {0} count, {1} passes", rndCount, rndPass);
+
+            // dump block order
+            foreach (var block in list)
+            {
+                FlasherInterface.WriteLine("Block address 0x{0:X8}",block.Address);
+            }
+            FlasherInterface.WriteLine();
         }
 
         /// <summary>

@@ -1,6 +1,6 @@
-// code to test the bootloader on a PIC32MX150F128B (HypnoLSD module)
+// code to test the bootloader on a PIC32MX150F128B
+// (used on Hypnocube's HypnoLSD module, www.hypnocube.com)
 #include "BootLoader.h" 
-
 #include <xc.h>   // standard part port definitions
 #include <plib.h> // peripherial definitions
 #include <stdbool.h>
@@ -15,7 +15,7 @@
 #define VERSION  0x10 // version 1.0, May 2015
 
 /* Version history
- * 1.0 - intial release
+ * 1.0 - initial release
   */
 
 #define TEXT_SIZE 100 // size of input/output buffer
@@ -49,11 +49,10 @@ char text[TEXT_SIZE];
 #pragma config PWP      = OFF           // Program Flash Write Protect
 #pragma config ICESEL   = ICS_PGx2      // ICE/ICD Comm Channel Select
 #pragma config DEBUG    = OFF           // Background Debugger Enable
-    // todo - turn on watchdog timer? tickle
+// todo - turn on watchdog timer? tickle
 
 
 /*********************** UART code ********************************************/
-
 // select which to use
 #if 1
 #define HC_UART1
@@ -63,24 +62,7 @@ char text[TEXT_SIZE];
 
 //The desired startup baudRate
 #define DESIRED_BAUDRATE   (1000000)
-UINT16 clockDivider = SYS_CLOCK/(4*DESIRED_BAUDRATE) - 1;
-
-// if there is any UART error, return 1, else return 0
-int UARTError()
-{
-        int err =
-        U1STAbits.OERR | // overrun error
-        U1STAbits.FERR | // framing error
-        U1STAbits.PERR ; // parity error
-
-        err |=
-        U2STAbits.OERR | // overrun error
-        U2STAbits.FERR | // framing error
-        U2STAbits.PERR ; // parity error
-
-        return err!=0?1:0;
-}
-
+uint16_t clockDivider = SYS_CLOCK/(4*DESIRED_BAUDRATE) - 1;
 
 // read byte if one is ready.
 // if exists, return true and byte
@@ -96,7 +78,6 @@ bool UARTReadByte(uint8_t * byte)
     *byte = 0;
     return false;
     } // UARTReadByte
-
 
 // blocking call to write byte to UART
 void UARTWriteByteMain(char byte)
@@ -122,7 +103,7 @@ void PrintSerialMain(const char * message)
 
 // set the baud rate divider
 // The baud is Floor[80000000/(4*(divider+1)].
-void SetUARTClockDivider(UINT16 divider)
+void SetUARTClockDivider(uint16_t divider)
 {
 
 	// define setup Configuration 1 for OpenUARTx
@@ -185,77 +166,60 @@ void InitializeUART(int clock)
     SetUARTClockDivider(clockDivider);
 }
 
-
 /*********************** main code ********************************************/
 
 // initialize hardware
 void Initialize()
 {
-        // All of these items will affect the performance of your code and cause it to run significantly slower than you would expect.
-	SYSTEMConfigPerformance(SYS_CLOCK);
+    // All of these items will affect the performance of your code and cause it to run significantly slower than you would expect.
+    SYSTEMConfigPerformance(SYS_CLOCK);
 
-	WriteCoreTimer(0); // Core timer ticks once every two clocks (verified)
+    WriteCoreTimer(0); // Core timer ticks once every two clocks (verified)
 
-	// set default digital port A for IO
-	DDPCONbits.JTAGEN = 0; // turn off JTAG
-	DDPCONbits.TROEN = 0; // ensure no tracing on
-	//mPORTASetPinsDigitalOut(BIT_0 | BIT_1 | BIT_2 | BIT_3 | BIT_4 | BIT_5 | BIT_6 | BIT_7);
+    // set default digital port A for IO
+    DDPCONbits.JTAGEN = 0; // turn off JTAG
+    DDPCONbits.TROEN = 0; // ensure no tracing on
+    //mPORTASetPinsDigitalOut(BIT_0 | BIT_1 | BIT_2 | BIT_3 | BIT_4 | BIT_5 | BIT_6 | BIT_7);
 
-        // todo - set this based on width of image. make rest inputs?
-        mPORTBSetPinsDigitalOut(BIT_0|BIT_1|BIT_2|BIT_3|BIT_4|BIT_5|BIT_6|BIT_7|BIT_8|BIT_9|BIT_10|BIT_11|BIT_12|BIT_13|BIT_14|BIT_15);
+    // todo - set this based on width of image. make rest inputs?
+    mPORTBSetPinsDigitalOut(BIT_0|BIT_1|BIT_2|BIT_3|BIT_4|BIT_5|BIT_6|BIT_7|BIT_8|BIT_9|BIT_10|BIT_11|BIT_12|BIT_13|BIT_14|BIT_15);
 
-        // Configure the device for maximum performance but do not change the PBDIV
-        // Given the options, this function will change the flash wait states, RAM
-        // wait state and enable prefetch cache but will not change the PBDIV.
-        // The PBDIV value is already set via the pragma FPBDIV option above..
-        int pbClk = SYSTEMConfig( SYS_CLOCK, SYS_CFG_WAIT_STATES | SYS_CFG_PCACHE);
+    // Configure the device for maximum performance but do not change the PBDIV
+    // Given the options, this function will change the flash wait states, RAM
+    // wait state and enable prefetch cache but will not change the PBDIV.
+    // The PBDIV value is already set via the pragma FPBDIV option above..
+    int pbClk = SYSTEMConfig( SYS_CLOCK, SYS_CFG_WAIT_STATES | SYS_CFG_PCACHE);
 
-        InitializeUART(pbClk);
+    InitializeUART(pbClk);
 
-        mPORTASetPinsDigitalOut(BIT_1);
+    mPORTASetPinsDigitalOut(BIT_1);
 
 
-        // set internals
-        // SetUARTClockDivider(flashOptions.baudDivisor);
+    // set internals
+    // SetUARTClockDivider(flashOptions.baudDivisor);
 
-	// prepare 32 bit timer 45 to trigger interrupts
-        //OpenTimer45(T45_ON | T45_SOURCE_INT | T45_PS_1_1, interruptTime);
+    // prepare 32 bit timer 45 to trigger interrupts
+    //OpenTimer45(T45_ON | T45_SOURCE_INT | T45_PS_1_1, interruptTime);
 
-        // set up the timer interrupt and priority
-	//ConfigIntTimer45(T4_INT_ON | T4_INT_PRIOR_7);
+    // set up the timer interrupt and priority
+    //ConfigIntTimer45(T4_INT_ON | T4_INT_PRIOR_7);
 
-        // enable multivectored interrupts
-	//INTEnableSystemMultiVectoredInt();
+    // enable multivectored interrupts
+    //INTEnableSystemMultiVectoredInt();
 
-	// start watchdog timer
-	//tickle in interrupt, turn off during reset of device, causes a reset
-	//The next statement enables the Watchdog Timer:
-	// WDTCONbits.ON = 1;
+    // start watchdog timer
+    //tickle in interrupt, turn off during reset of device, causes a reset
+    //The next statement enables the Watchdog Timer:
+    // WDTCONbits.ON = 1;
 
-        //sprintf(text,"Wait states %d\r\n.",BMXCONbits.BMXWSDRM);
-        //PrintSerial(text);
-        //BMXCONbits.BMXWSDRM = 0; // set RAM access to zero wait states
+    //sprintf(text,"Wait states %d\r\n.",BMXCONbits.BMXWSDRM);
+    //PrintSerial(text);
+    //BMXCONbits.BMXWSDRM = 0; // set RAM access to zero wait states
 
-        //sprintf(text,"TODO _ REMOVE:override %d\r\n",pinOverride);
-        //PrintSerial(text);
-        //sprintf(text,"TODO _ REMOVE:actual %d\r\n",PORTAbits.RA1);
-        //PrintSerial(text);
-}
-
-// wait the given number of milliseconds
-void DelayMs(int milliseconds)
-{
-    UINT32 time = ReadCoreTimer();
-    UINT32 startTicks = milliseconds*TICKS_PER_MILLISECOND;
-    UINT32 ticks = startTicks-1;
-
-    // loop till rolls over
-    while (ticks <= startTicks)
-    {
-        UINT32 newTime = ReadCoreTimer();
-        ticks -= newTime-time;
-        time = newTime;
-    }
+    //sprintf(text,"TODO _ REMOVE:override %d\r\n",pinOverride);
+    //PrintSerial(text);
+    //sprintf(text,"TODO _ REMOVE:actual %d\r\n",PORTAbits.RA1);
+    //PrintSerial(text);
 }
 
 int main(void)
@@ -273,7 +237,6 @@ int main(void)
     WriteCoreTimer(0);
     while (1)
     {
-        //DelayMs(1000);
         if (ReadCoreTimer()>1000*TICKS_PER_MILLISECOND)
         {
             PrintSerialMain(".");
@@ -284,7 +247,7 @@ int main(void)
         
         if (UARTReadByte(&byte) && byte != 0xFC)
         {
-            sprintf(text,"Main saw command %d = %c.\r\n",(int)byte,byte);
+            sprintf(text,"Main code saw command %d = %c.\r\n",(int)byte,byte);
             PrintSerialMain(text);
             BootloaderEntry(); // call again to simplify testing
         }

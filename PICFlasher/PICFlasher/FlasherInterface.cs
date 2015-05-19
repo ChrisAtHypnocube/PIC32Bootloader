@@ -138,7 +138,7 @@ namespace Hypnocube.PICFlasher
                     SetColors(FlasherColor.Black, FlasherColor.White);
                     break;
                 case FlasherMessageType.Info:
-                    SetColors(FlasherColor.DarkMagenta, FlasherColor.Black);
+                    SetColors(FlasherColor.White, FlasherColor.Black);
                     break;
                 case FlasherMessageType.Warning:
                     SetColors(FlasherColor.Black, FlasherColor.Yellow);

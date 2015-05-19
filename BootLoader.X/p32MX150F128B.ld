@@ -120,10 +120,11 @@ Also added .hcbram  section to map into this memory segment
 
    TODO - shrink as much as possible
 */
+
 MEMORY
 {
-  hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x02000
-  kseg0_program_mem     (rx)  : ORIGIN = 0x9D002000, LENGTH = 0x1F000-0x2000
+  hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1800
+  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000+0x1800, LENGTH = 0x1F000-0x1800
   exception_mem               : ORIGIN = 0x9D01F000, LENGTH = 0x1000
 
   debug_exec_mem              : ORIGIN = 0x9FC00490, LENGTH = 0x760
@@ -141,6 +142,10 @@ MEMORY
 
   configsfrs                  : ORIGIN = 0xBFC00BF0, LENGTH = 0x10
 }
+
+/* Hypnocube - Chris Lomont changed this to add a size for the bootloader code*/
+_HCBOOT_LD_SIZE_ = LENGTH(hypnocube_bootcode);
+
 
 /*************************************************************************
  * Configuration-word sections. Map the config-pragma input sections to
@@ -532,6 +537,7 @@ SECTIONS
     KEEP (*(.hcbcode.*))
     . = ALIGN(4) ;
   } >hypnocube_bootcode
+
   .hcbram :
   {
     *(.hcbram.*)

@@ -18,28 +18,54 @@
 
 
 /************************** Usage: *********************************************
- * todo
- *  1. Add this file to your program (it makes keeping the config bits in sync)
- *  2. To position it in memory, you must add and modify the linker script.
- *     This is in Microchip distro, has the same name as your PIC, like
- *     p32MX150F128B.ld. We put this in normal flash (see notes), at the
- *     beginning, by splitting the linker script line in the MEMORY section thus
  *
+ *  1. Add this file (BootLoader.c) to your program.
+ *     This makes keeping the config bits in sync; the bootloader and main
+ *     program need to share configuration bits.
+ *  2. The bootloader needs to reside in a fixed location in FLASH. It uses the
+ *     lowest address user FLASH (not the boot flash - see the notes section).
+ *     To position it in memory, you must add and modify the linker script:
+ *     
+ *     This is in Microchip directories, has the same name as your PIC with a
+ *     *.ld extension. For example, if you're using a PIC32MX150F128B, find the 
+ *     file named p32MX150F128B.ld, and make a copy in your project directory.
  *
- *       kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1F000
+ *     Add this file to your project; now the linker will use your copy instead
+ *     of the default one.
+ *
+ *     To reserve a space for the bootloader, edit your copy of the linker
+ *     script as follows: near the file beginning, in the MEMORY section,
+ *     find the kseg0_program_mem line:
+ 
+ *         kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1F000
+ *
+ *     Subtract 0x1800 from the LENGTH, add it to the ORIGIN, and insert
+ *     another entry like so. This split the memory section into two. Depending
+ *     on compiler options, you may have to increase this 0x1800 as needed.
+ *
+ *         hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1800
+ *         kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000+0x1800, LENGTH = 0x1F000-0x1800
+ *
+ *     Also reserve one word in RAM by similarly splitting the line
+ *
+ *         kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x8000
+ *
  *     into two
- *       hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x01000
- *       kseg0_program_mem     (rx)  : ORIGIN = 0x9D001000, LENGTH = 0x1E000
+ * 
+ *         hypnocube_bootram    (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x4
+ *         kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000004, LENGTH = 0x8000-4
  *
- *     Also reserve one word in RAM by splitting one line
+ *     These two changes made room in flash and ram for our uses. Right after 
+ *     the closing brace in the memory section, add this line
+ * 
+ *         _HCBOOT_LD_SIZE_ = LENGTH(hypnocube_bootcode);
  *
- *        kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x8000
- *     into two
- *       hypnocube_bootram    (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x4
- *       kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000004, LENGTH = 0x8000-4
- *
- *     Next, before the .text: section definition,  add these sections to
- *     map the code to this memory section:
+ *     which defines a symbol used in the code to determine the bootloader 
+ *     code area to protect.
+ * 
+ *     Now we have to tell the linker what to put in these locations using
+ *     SECTIONs. So, before the .text: section definition, add these sections 
+ *     to map the code to this memory section:
  *
  *        .hcbcode :
  *        {
@@ -58,37 +84,59 @@
  *          . = ALIGN(4) ;
  *        } >hypnocube_bootram
  *
- *     Now the bootloader code and single ram location will be located nicely.
+ *     Now the bootloader code and single variable will be located correctly.
  *
  *
- *  2. set crt0
+ *  3. To make the bootloader called on power up, you need to modify the C
+ *     runtime startup code.
  *
-_startup:
-
-        ##################################################################
-        # Bootloader jump added by Chris Lomont from Hypnocube. If this is
-        # changed, the check code in the bootloader must be changed, since
-        # exactly this code sequence must appear early in the reset area
-        ##################################################################
-        la      sp,0xA0000000 + 8*1024 # all PIC32s have at least 16K RAM, use 8
-        la      t0,BootloaderEntry     # boot address, always same location
-        jalr    t0                     # jump and link so we can return here
-        nop                            # required branch delay slot, executed
-
+ *     Locate the crt0.S file in the Microchip distribution, and copy it to
+ *     your project. Rename it to BootLoader_crt0.S. The capital S is important.
+ *     Change the project linker settings to not link the default startup code
+ *     (Properties -> XC32 -> xc32-ld -> libraries -> Do not link startup code)
  *
+ *     Change the compiler to emit sections for each function and variable
+ *     by changing two options under g++ (Isolate each function in its own
+ *     section AND Place data in its own section).
  *
- *  4. edit parameters in the user defines section
- *  5. test
+ *     Edit it to call the bootloader before (almost) anything else is done.
+ *     Right after the _startup: symbol, insert these lines (do not insert a
+ *     second startup symbol):
  *
- * todo - uses lots of stack!
+ * _startup:
  *
- *  . Compile with optimized, else bigger linker spaces
+ *       ##################################################################
+ *       # Bootloader jump added by Chris Lomont from Hypnocube. If this is
+ *       # changed, the check code in the bootloader must be changed, since
+ *       # exactly this code sequence must appear early in the reset area
+ *       ##################################################################
+ *       la      sp,0xA0000000 + 8*1024 # all PIC32s have at least 16K RAM, use 8
+ *       la      t0,BootloaderEntry     # boot address, always same location
+ *       jalr    t0                     # jump and link so we can return here
+ *       nop                            # required branch delay slot, executed
  *
- * n. Define for your PIC if not present
- * Read notes for help, info
+ *     It is important these lines compile to reside very near the beginnging
+ *     of the reset entry point, because the bootloader will not allow
+ *     overwriting of this location without the same code snippet occurring.
  *
- * TODO: explain if use modified CRT, remove link option from linker
- * Theory of operation: todo
+ *  4. Edit parameters in the user defines section. The SYS_CLOCK needs to match
+ *     your device on power up, and DESIRED_BAUDRATE and uart used need to match
+ *     your design.
+ *
+ *     You may need to implement code for other UART ports or PICs than are here
+ *     already. Please submit fixes and changes back to Chris Lomont so they
+ *     can be incorporated.
+ *
+ *  5. Compile with the small, optimized code setting, otherwise the bootloader
+ *     will not fit in the 0x1000 bytes from above. If you don't have that
+ *     compiler, increase the sizes above to 0x2000 or whatever you need to get
+ *     it to fit.
+ *
+ *     The size must be an integral number of flash pages. Check your page
+ *     sizes.
+ *
+ *  6. Read the Notes section for more information.
+ *
  ******************************************************************************/
 
 
@@ -149,8 +197,15 @@ _startup:
 #define FLASH_PAGE_SIZE 1024 // bytes
 #define FLASH_ROW_SIZE   128 // bytes
 
+#else
+
+error! need defines for your chip
+
+#endif
+
+// todo - clean and orgainze these better
 // memory regions, end is one past usable end
-// all values are PHYSICAL addresses, not  logical
+// all values are PHYSICAL addresses, not logical
 // most (all) are the same across chips
 #define RAM_START            0x00000000
 #define RAM_END              ((RAM_START) + (BMXDRMSZ))
@@ -172,17 +227,10 @@ _startup:
 
 
 
-#else
-
-error! need defines for your chip
-
-#endif
-
-
-
-
 /*********************** Notes *************************************************
- * 
+ * TODO - check all TODOs :)
+ *
+ * TODO - clean this section, organize, split
  * Original idea to make a boot flash bootloader is fraught with problems:
  *  1. Boot flash is small, 3K = 0xD00, on many PICs
  *  2. Boot flash has a debug executive in it, and several fixed addresses
@@ -211,6 +259,13 @@ error! need defines for your chip
  *       debug executive, but should allow changes to be made to the exception vectors
  *       which is more important
  *
+ *
+ * "How to Get the Least out of your PIC32 C compiler"
+ * http://www.microchip.com/stellent/groups/SiteComm_sg/documents/DeviceDoc/en557154.pdf
+
+ *
+ * takes a few times to connect under Windows - not sure why - 400ms, seconds...
+ *  *
  * DEVCFG0 bits
  *    CP  : prevent flash reading/modification from external device 0=enabled, 1=disabled
  *    BWP : prevent boot flash from being modified during code execution 0=not writeable, 1=writeable
@@ -230,6 +285,15 @@ error! need defines for your chip
  *
  *    
  *
+ * todo - uses lots of stack!
+ *
+ *  . Compile with optimized, else bigger linker spaces
+ *
+ * n. Define for your PIC if not present
+ * Read notes for help, info
+ *
+ * TODO: explain if use modified CRT, remove link option from linker
+ * Theory of operation: todo
  *
  *
  * // compile with size flags to make small enough
@@ -414,16 +478,21 @@ more*
 // useful for testing when you don't want flash being changed
 // #define IGNORE_FLASH_OPS
 
-// addresses to protect the bootloader
-#define BOOTLOADER_SIZE            0x2000 // must match linker script
-#define BOOT_BASE_ADDRESS      0x1D000000 // note PHYSICAL address
-#define BOOT_ENTRY_ADDRESS     0x9D000000 // note LOGICAL address
+// from linker
+extern const unsigned int _HCBOOT_LD_SIZE_;
 
-// number of 32-bit instructions matched to detect bootloader
-#define BOOT_INSTRUCTION_COUNT 6
+// addresses to protect the bootloader
+// todo - make BOOTLOADER_SIZE match the linker script automatically?
+//#define BOOTLOADER_SIZE              0x2000 // must match linker script
+#define BOOTLOADER_SIZE          ((uint32_t)(&_HCBOOT_LD_SIZE_))// must match linker script
+#define BOOT_PHYSICAL_ADDRESS    0x1D000000 // note PHYSICAL address
+#define BOOT_LOGICAL_ADDRESS     0x9D000000 // note LOGICAL address
+
+
 // max number of 32-bit instructions scanned to detect bootloader
 #define BOOT_INSTRUCTION_SEEK  12
-
+// number of 32-bit instructions matched to detect bootloader
+#define BOOT_INSTRUCTION_COUNT 6
 
 // space needed for buffer overhead when loading write packets
 #define BUFFER_OVERHEAD 20
@@ -432,11 +501,12 @@ more*
 #define BUFFER_SIZE (FLASH_PAGE_SIZE+BUFFER_OVERHEAD)
 
 // used to put code items into the boot rom section we defined in the linker script
-#define BOOT_CODE __attribute__((section(".hcbcode")))
+#define BOOT_CODE   __attribute__((section(".hcbcode"))) BOOTLOADER_MIPS
+#define BOOT_CODE32 __attribute__((section(".hcbcode"))) __attribute__((mips32))
 
 // used to put entry point into the boot rom section we defined in the linker script
 // needs an extra section extension, else placed incorrectly in the section
-#define BOOT_ENTRY __attribute__((section(".hcbcode.entry")))
+#define BOOT_ENTRY __attribute__((section(".hcbcode.entry"))) BOOTLOADER_MIPS
 
 // used to put data items into the boot rom section we defined in the linker script
 // the ',r' part marks the data with a readonly attribute, for linker use
@@ -461,11 +531,22 @@ more*
 #define LOGICAL_TO_PHYSICAL_ADDRESS(addr) ((addr)&0x1FFFFFFF)
 
 // bootloader code version
-#define BOOTLOADER_VERSION_MAJOR 0
-#define BOOTLOADER_VERSION_MINOR 5
+//#define BOOTLOADER_VERSION_MAJOR 0
+//#define BOOTLOADER_VERSION_MINOR 5
+/*FIX_ADDRESS(BOOT_LOGICAL_ADDRESS+BOOTLOADER_SIZE - 16)*/
+        // todo - get absolute address to work, so user can query, or make function?
+BOOTSTRING(bootloaderVersion,"0.5");
 
 // Send \r\n to UART
 #define ENDLINE()  {BootUARTWriteByte('\r');BootUARTWriteByte('\n'); }
+
+// write a single character with the high bit set, useful for debugging
+// note that ASCII 'p'-'z and {|}~ will overlap NACK and ACK codes, so
+// don't use them
+#define ERROR(ch) BootUARTWriteByte((128|ch))
+
+// write a single character, useful
+#define WRITE(ch) BootUARTWriteByte(ch)
 
 #define CRYPTO_ROUNDS 20 // for 20 rounds of Salsa20
 
@@ -657,7 +738,6 @@ BOOT_CODE static void BootUARTWriteByte(char byte)
 #endif
 }
 
-//#ifdef DEBUG_BOOTLOADER // removed this function from release version
 // print the message to the serial port.
 BOOT_CODE static void BootPrintSerial(const char * message)
 {
@@ -667,7 +747,6 @@ BOOT_CODE static void BootPrintSerial(const char * message)
         message++;
     }
 }
-//#endif
 
 // print the integer to the serial port.
 BOOT_CODE static void BootPrintSerialInt(uint32_t value)
@@ -705,8 +784,8 @@ BOOT_CODE static void BootPrintSerialHexN(uint32_t value, int n)
 // print the integer to the serial port as a 4 byte hex value
 BOOT_CODE static void BootPrintSerialHex(uint32_t value)
 {
-    BootUARTWriteByte('0');
-    BootUARTWriteByte('x');
+    WRITE('0');
+    WRITE('x');
     BootPrintSerialHexN(value, 8);
 }
 
@@ -807,13 +886,13 @@ BOOT_CODE static uint32_t BootOverlap(
 }
 
 // set the core tick counter
-BOOT_CODE static inline void BootWriteTimer(uint32_t time)
+BOOT_CODE32 static void BootWriteTimer(uint32_t time)
 {
     asm volatile("mtc0   %0, $9": "+r"(time));
 }
 
 // read the core tick counter
-BOOT_CODE static inline uint32_t BootReadTimer()
+BOOT_CODE32 static uint32_t BootReadTimer()
 {
     uint32_t time;
     asm volatile("mfc0   %0, $9" : "=r"(time));
@@ -1115,23 +1194,23 @@ BOOT_CODE static bool BootNVMemOperation(Boot_t * bs, uint32_t nvmop)
     nvmop = NVMCON;
     if (nvmop & (1<<12))
     {
-        BootUARTWriteByte('L'); // low voltage detect error bit
-
+        ERROR('L'); // low voltage detect error bit
     }
     if (nvmop & (1<<13))
     {
-        BootUARTWriteByte('W'); // write error bit
+        ERROR('W'); // write error bit
     }
 
     if (nvmop & 0x3000)
     { // must clear error bit
-        BootUARTWriteByte('C'); // write noise
+        ERROR('C'); // write noise
         if (!BootNVMemOperation(bs,NVM_OP_CLEAR_ERROR))
         {
             // massive error? infinite loop?
             while (1)
             {
-                BootUARTWriteByte('@'); // write noise
+                ERROR('@');
+                BootDelay(&(bs->nvmTimerUs),TICKS_PER_MILLISECOND,1000);
             }
         }
     }
@@ -1147,7 +1226,7 @@ BOOT_CODE static bool BootNVMemWriteWord(Boot_t * bs, uint32_t physicalDestinati
 {
     if (physicalDestinationAddress&(3U))
     {
-        BootUARTWriteByte('a');
+        ERROR('a');
         return false; // not aligned
     }
     NVMADDR = physicalDestinationAddress;
@@ -1163,14 +1242,14 @@ BOOT_CODE static bool BootNVMemWriteRow(Boot_t * bs, uint32_t physicalDestinatio
 {
     if (physicalDestinationAddress & (FLASH_ROW_SIZE-1))
     {
-        BootUARTWriteByte('a');
+        ERROR('a');
         return false;
     }
 
     // must be word aligned
     if (((uint32_t)physicalData) & (3U))
     {
-        BootUARTWriteByte('b');
+        ERROR('b');
         return false;
     }
 
@@ -1259,6 +1338,11 @@ BOOT_CODE bool BootDetectBootloaderShim(const uint32_t * address)
     return false; // did not match
 }
 
+BOOT_CODE const char * BootloaderVersion()
+{
+    return bootloaderVersion;
+}
+
 // check assumptions needed for proper function
 // return true on success, else false
 BOOT_CODE bool BootTestAssumptions()
@@ -1272,16 +1356,15 @@ BOOT_CODE bool BootTestAssumptions()
      */
 
     // check entry address
-    if ((uint32_t)(&BootloaderEntry) != BOOT_ENTRY_ADDRESS)
+    if ((uint32_t)(&BootloaderEntry) != BOOT_LOGICAL_ADDRESS)
         return false;
 
     // check string addresses working
-    // BootDebugPrintE("TODO - test string addresses in BootTestAssumptions")
-    //if ((uint32_t)BOOTLOADER_VERSION < BOOT_ENTRY_ADDRESS || (BOOT_ENTRY_ADDRESS+BOOTLOADER_SIZE) < (uint32_t)BOOTLOADER_VERSION)
-    //    return false;
+    if ((uint32_t)bootloaderVersion < BOOT_LOGICAL_ADDRESS || (BOOT_LOGICAL_ADDRESS+BOOTLOADER_SIZE) < (uint32_t)bootloaderVersion)
+        return false;
 
     // test bootloaderShim, want in boot code
-    if ((uint32_t)bootloaderShim < BOOT_ENTRY_ADDRESS || (BOOT_ENTRY_ADDRESS+BOOTLOADER_SIZE) < (uint32_t)bootloaderShim)
+    if ((uint32_t)bootloaderShim < BOOT_LOGICAL_ADDRESS || (BOOT_LOGICAL_ADDRESS+BOOTLOADER_SIZE) < (uint32_t)bootloaderShim)
         return false;
 
     //// check boot code in place in crt0 at the reset vector
@@ -1295,15 +1378,14 @@ BOOT_CODE bool BootTestAssumptions()
     return true;
 }
 
-BOOTSTRING(infoText01,"Testing info strings");
+BOOTSTRING(infoText00,"Bootloader Version    : ");
+BOOTSTRING(infoText01,"DEVID                 : ");
+BOOTSTRING(infoText02,"DEVID Ver             : ");
+BOOTSTRING(infoText03,"Bootloader size       : ");
 
 BOOT_CODE static void BootCommandInfo(Boot_t * bs)
 {
-    BootUARTWriteByte('T');
-    BootPrintSerial(infoText01);
 
-
-#ifdef DEBUG_BOOTLOADER
 #define DUMPHEX(txt,val) BootPrintSerial(txt); \
     BootPrintSerialHex(val); \
     ENDLINE();
@@ -1311,46 +1393,22 @@ BOOT_CODE static void BootCommandInfo(Boot_t * bs)
 #define DUMPINT(txt,val) BootPrintSerial(txt); \
     BootPrintSerialInt(val); \
     ENDLINE();
-#else
-#define DUMPHEX(txt,val) \
-    BootPrintSerialHex(val); 
-
-#define DUMPINT(txt,val) \
-    BootPrintSerialInt(val); 
-#endif
 
     // BootPrintSerialHex((uint32_t)BOOTLOADER_VERSION);
 
-    BootUARTWriteByte('1');
-
     // chip and code versions
-    BootDebugPrint("Bootloader Version    : ");
-    
-    BootUARTWriteByte('2');
-
-    BootUARTWriteByte('0'+BOOTLOADER_VERSION_MAJOR);
-
-    BootUARTWriteByte('3');
-
-    BootUARTWriteByte('.');
-
-    BootUARTWriteByte('3');
-
-    BootUARTWriteByte('0'+BOOTLOADER_VERSION_MINOR);
-
+    BootPrintSerial(infoText00);
+    BootPrintSerial(BootloaderVersion());
     ENDLINE();
 
-    DUMPHEX("DEVID                 : ", DEVIDbits.DEVID);
-    DUMPHEX("DEVID Ver             : ", DEVIDbits.VER);
-
-    BootUARTWriteByte('V');
+    DUMPHEX(infoText01, DEVIDbits.DEVID);
+    DUMPHEX(infoText02, DEVIDbits.VER);
+    DUMPHEX(infoText03, BOOTLOADER_SIZE);
 
 
 #ifdef DEBUG_BOOTLOADER
 
     BootPrintMemory("Boot flash entry bytes: ", 0xBFC00000,32);
-
-
 
     int seen = BootDetectBootloaderShim((uint32_t*)BOOT_START_LOGICAL);
     DUMPHEX("Boot shim detected    : ", seen);
@@ -1372,7 +1430,6 @@ BOOT_CODE static void BootCommandInfo(Boot_t * bs)
     // BootPrintMemory("Mem at 0x9D00 2000: ", 0x9D002000, 8*16);
 
 #endif
-    
 
 #undef DUMPHEX // clean up
 #undef DUMPINT
@@ -1389,10 +1446,10 @@ BOOT_CODE static bool BootModifyAddressesAllowed(uint32_t address, uint32_t leng
     // protect the bootloader code itself
     if (BootOverlap(
             address, address+length,
-            BOOT_BASE_ADDRESS, BOOT_BASE_ADDRESS+BOOTLOADER_SIZE) != 0
+            BOOT_PHYSICAL_ADDRESS, BOOT_PHYSICAL_ADDRESS+BOOTLOADER_SIZE) != 0
             )
     {
-        BootUARTWriteByte('B');
+        ERROR('B');
         return false; // would overwrite boot code
     }
 
@@ -1403,7 +1460,7 @@ BOOT_CODE static bool BootModifyAddressesAllowed(uint32_t address, uint32_t leng
             BOOT_START, BOOT_END) != 0
             )
     {
-        BootUARTWriteByte('S');
+        ERROR('S');
         return false; // would overwrite boot flash
     }
 #endif
@@ -1418,7 +1475,7 @@ BOOT_CODE static bool BootModifyAddressesAllowed(uint32_t address, uint32_t leng
             ) != 0
             )
     {
-        BootUARTWriteByte('C');
+        ERROR('C');
         return false; // would overwrite configuration bits
     }
 
@@ -1612,8 +1669,6 @@ BOOT_CODE static uint32_t BootWriteFlash(Boot_t * bs)
         }
     }
 
-
-
     // do not overwrite cfg - requires special writing mode - can do if careful
     // currently redundant, but left in for future error catching
     if (
@@ -1634,26 +1689,26 @@ BOOT_CODE static uint32_t BootWriteFlash(Boot_t * bs)
     { // write largest chunk possible        
         if (((bs->curAddress & (FLASH_ROW_SIZE-1))==0) && (FLASH_ROW_SIZE <= bs->writeAddress + bs->writeSize - bs->curAddress))
         { // row aligned and long enough
-            BootUARTWriteByte('R');
+            //BootUARTWriteByte('R');
 
             if (BootNVMemWriteRow(bs,
                 bs->curAddress,
                 (uint32_t*)(LOGICAL_TO_PHYSICAL_ADDRESS(((uint32_t)(bs->buffer + (bs->curAddress - bs->writeAddress)))))
                 ) == false)
             {
-                BootUARTWriteByte('-');
+                ERROR('-');
                 bs->writeFailureCount++;
             }
             bs->curAddress  += FLASH_ROW_SIZE;
         }
         else
         { // long enough for word write
-            BootUARTWriteByte('W');
+            // BootUARTWriteByte('W');
             if (BootNVMemWriteWord(bs,bs->curAddress,
                     *((uint32_t*)(bs->buffer + bs->curAddress - bs->writeAddress))
                     ) == false)
             {
-                BootUARTWriteByte('-');
+                ERROR('-');
                 bs->writeFailureCount++;
             }
             bs->curAddress  += 4;
@@ -1866,13 +1921,13 @@ BOOT_CODE static void BootCommandWrite(Boot_t * bs)
     BootReadBigEndian(&(bs->writeSize),bs->buffer+bs->readMax-4-2,2);
     BootReadBigEndian(&(bs->writeAddress),bs->buffer+bs->readMax-4-6,4);
 
-//#ifdef DEBUG_BOOTLOADER
+#ifdef DEBUG_BOOTLOADER
     BootDebugPrint("Writing ");
     BootPrintSerialHex(bs->writeSize);
     BootDebugPrint(" to address ");
     BootPrintSerialHex(bs->writeAddress);
     ENDLINE();
-//#endif
+#endif
 
     // loop on writing a few times in case first pass fails
     bs->writeRetryCounter = 0;
@@ -1944,7 +1999,11 @@ BOOT_CODE static void BootCommandCRC(Boot_t * bs)
         bs->computedCrc = BootCrc32AddByteBitwise(*((uint8_t*)bs->curAddress), bs->computedCrc);
     }
 
+
+    BOOTSTRING(allCrcText, "CRC of all flash: ");
+    BootPrintSerial(allCrcText);
     BootPrintSerialHex(bs->computedCrc);
+    ENDLINE();
 
     // final ACK
     BootUARTWriteByte(ACK);
@@ -1955,14 +2014,6 @@ BOOT_CODE static void BootCommandCRC(Boot_t * bs)
 /*
  * Command Loop - this is a loop, in client/server mode, Flasher sends command,
  *    Device responds.
- *
- * Commands: have form [command byte]([address 32 bits][length][data])[CRC]
- *    'I' (0x49) = Identify. No data. Respond ? bytes info
- *        Useful fields: bootloader version, product version, PIC version?
- *        Responds with DATA CRC
- *    'E' (0x45) = Erase. Send 'E' Address CRC, responds ACK CRC
- *    'W' (0x57) = Write. Send 'W' Address Length CRC, returns ACK CRC or NACK CRC
- *    'Q' (0x51) = Quit. Send 'Q'CRC. Return ACK then Device exits boot loader.
  */
 
 BOOT_CODE static void BootRunCommandLoop(Boot_t * bs)
@@ -1979,8 +2030,6 @@ BOOT_CODE static void BootRunCommandLoop(Boot_t * bs)
             // do nothing
         }
 
-        BootUARTWriteByte('Z');
-
         switch (bs->buffer[0])
         {
             case 'I' : // information
@@ -1992,9 +2041,6 @@ BOOT_CODE static void BootRunCommandLoop(Boot_t * bs)
                 BootCommandErase(bs);
                 bs->packetCounter = 0;
                 bs->writesFinished = false;
-
-                BootUARTWriteByte('X');
-                
                 break;
             case 'C' : // CRC everything
                 BootCommandCRC(bs);
@@ -2079,7 +2125,7 @@ BOOT_CODE static void BootSoftReset()
 }
 
 // run the bootloader
-BOOT_ENTRY FIX_ADDRESS(BOOT_ENTRY_ADDRESS) uint8_t BootloaderEntry()
+BOOT_ENTRY FIX_ADDRESS(BOOT_LOGICAL_ADDRESS) uint8_t BootloaderEntry()
 {
     // assume power check succeeds, set reason
     bootResult = BOOT_RESULT_POWER_EXIT;
@@ -2123,22 +2169,23 @@ BOOT_ENTRY FIX_ADDRESS(BOOT_ENTRY_ADDRESS) uint8_t BootloaderEntry()
     if (BootSetHardware())
     {
         BootDebugPrintE("Hardware set");
-        BootDebugPrintE("TODO - check flash writeable!");
         
         // show LED if present
         LED_ON();
 
-        // needed done before writing is allowed
+        // needs erased before writing is allowed
         bs->flashErased = false;
 
         // 2. See if flashing attempted
         if (BootDetectFlashingAttempt(bs))
         {
+            BOOTSTRING(flashText01,"Flasher detected at ");
+            BOOTSTRING(flashText02," ms.");
+
             // print time connected, useful for debugging
-            BootDebugPrint("Flasher detected at ");
+            BootPrintSerial(flashText01);
             BootPrintSerialInt(BootReadTimer()/TICKS_PER_MILLISECOND);
-            BootUARTWriteByte('m'); // detect time in ms
-            BootUARTWriteByte('s');
+            BootPrintSerial(flashText02);
             ENDLINE();
 
             // 3. If flashing, do it
@@ -2161,7 +2208,9 @@ BOOT_ENTRY FIX_ADDRESS(BOOT_ENTRY_ADDRESS) uint8_t BootloaderEntry()
     // clear all ram to prevent leakage?
     // softreset device?
 
-    BootDebugPrintE("Leaving bootloader code....");
+    BOOTSTRING(flashText03, "Leaving bootloader code....");
+    BootPrintSerial(flashText03);
+    ENDLINE();
 
     // reset device
     //BootDebugPrint("and resetting device...");

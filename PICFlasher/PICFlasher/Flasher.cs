@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Mime;
 using System.Threading;
 
 namespace Hypnocube.PICFlasher
@@ -24,6 +25,15 @@ namespace Hypnocube.PICFlasher
         public static string Version
         {
             get { return "0.5"; }
+        }
+
+        /// <summary>
+        /// A list of things to do when text seen
+        /// </summary>
+        private List<Tuple<string, Action<string>>>  lineActions = new List<Tuple<string, Action<string>>>();
+        void WatchForLine(string line,Action<string> lineAction)
+        {
+            lineActions.Add(new Tuple<string, Action<string>>(line,lineAction));
         }
 
 
@@ -118,14 +128,39 @@ namespace Hypnocube.PICFlasher
                                 WriteCommand('Q');
                                 break;
                             case 'm': // make image
-                                CreateImageFromHex(hexFilename, imgFilename, key);
-                                imageBlockIndex = 0;
+                                if (bootLength == 0)
+                                {
+                                    FlasherInterface.WriteLine(FlasherMessageType.Error,"Get information from bootloader first to determine bootloader size");
+                                }
+                                else
+                                {
+                                    CreateImageFromHex(hexFilename, imgFilename, key);
+                                    imageBlockIndex = 0;
+                                }
                                 break;
                             case 'l': // load image
                                 LoadImage(imgFilename);
                                 imageBlockIndex = 0;
                                 break;
                             case 'i': // info from boot loader
+                                WatchForLine("Bootloader size", line =>
+                                {
+                                    uint val;
+                                    if (!TryParseHex(line.Split().Last(), out val))
+                                    {
+                                        FlasherInterface.WriteLine(FlasherMessageType.Error, "Unable to parse boot length from line {0}", line);
+                                    }
+                                    else
+                                    {
+                                        bootLength = (int)val;
+                                        FlasherInterface.WriteLine(FlasherMessageType.Info,
+                                            "boot loader size {0}0x{1:X4}{2} parsed from line", 
+                                            FlasherInterface.ColorToken(FlasherColor.Green,FlasherColor.Black),
+                                            bootLength,
+                                            FlasherInterface.ColorToken()
+                                            );
+                                    }
+                                });
                                 WriteCommand('I');
                                 break;
                             case 'e': // erase flash on device
@@ -210,6 +245,15 @@ namespace Hypnocube.PICFlasher
             "NACK_ERASE_FAILED             = 0x0F"
         };
 
+        /// <summary>
+        /// Lines received from other end
+        /// </summary>
+        List<string> lines = new List<string>();
+
+        /// <summary>
+        /// Current line being read
+        /// </summary>
+        private string curLine = "";
         private void ProcessMessages(byte[] data)
         {
             foreach (var b in data)
@@ -228,8 +272,35 @@ namespace Hypnocube.PICFlasher
                     nackCount++;
                     FlasherInterface.WriteLine(FlasherMessageType.BootloaderNack,"[NACK 0x{0:X1} {1}] {2}", b & 0x0F, nackMsg[b & 0x0F], nackCount);
                 }
+                else if (0x128 <= b && b <= 255)
+                {
+                    FlasherInterface.Write(FlasherMessageType.BootloaderNack, "{0}", (char) (b - 128));
+                }
                 else
-                    FlasherInterface.Write(FlasherMessageType.BootloaderInfo,"{0}", (char)b);
+                {
+                    FlasherInterface.Write(FlasherMessageType.BootloaderInfo, "{0}", (char) b);
+                    if (b == '\n')
+                    {   
+                        // check line actions
+                        foreach (var entry in lineActions)
+                        {
+                            if (curLine.Contains(entry.Item1))
+                            { //do action
+                                entry.Item2(curLine);
+                            }
+                        }
+                        // remove matches
+                        lineActions = lineActions.Where(entry => !curLine.Contains(entry.Item1)).ToList();
+                        // save line and start a new one
+                        lines.Add(curLine);
+                        curLine = "";
+                    }
+                    else if (b != '\r')
+                    {
+                        curLine += (char)b;
+                    }
+                    
+                }
             }
         }
 
@@ -268,8 +339,8 @@ namespace Hypnocube.PICFlasher
 
 
         // length of bootloader
-        // todo - how to set from outside?
-        int bootLength = 0x2000;
+        // set from bootloader information
+        int bootLength = 0;
 
 
         private bool allowOverwriteBootFlash = true;
@@ -439,7 +510,16 @@ namespace Hypnocube.PICFlasher
                 imageBlockIndex = 0;
             var b = image.Blocks[imageBlockIndex];
             imageBlockIndex++;
-            FlasherInterface.WriteLine(FlasherMessageType.Info,"Writing block {0} of {1}", imageBlockIndex, image.Blocks.Count);
+
+            var numberToken = FlasherInterface.ColorToken(FlasherColor.Yellow, FlasherColor.Black);
+            if (imageBlockIndex == image.Blocks.Count)
+                numberToken = FlasherInterface.ColorToken(FlasherColor.Green, FlasherColor.Black);
+            var defaultToken = FlasherInterface.ColorToken();
+            FlasherInterface.WriteLine(FlasherMessageType.Info, "Writing block {2}{0}{3} of {2}{1}{3}", 
+                imageBlockIndex, image.Blocks.Count,
+                numberToken, defaultToken
+                );
+
             serialManager.WriteBytes(b);
         }
 
@@ -465,6 +545,15 @@ namespace Hypnocube.PICFlasher
             WriteCommand('E');
         }
 
+        private static bool TryParseHex(string hexString, out uint val)
+        {
+            if (hexString.StartsWith("0x", StringComparison.CurrentCultureIgnoreCase))
+                hexString = hexString.Substring(2);
+            return UInt32.TryParse(hexString,
+                NumberStyles.HexNumber,
+                CultureInfo.CurrentCulture,
+                out val);
+        }
         private uint[] LoadKey(string keyFilename)
         {
             if (!File.Exists(keyFilename))
@@ -491,17 +580,8 @@ namespace Hypnocube.PICFlasher
 
             for (var i = 0; i < 8; ++i)
             {
-                if (words[i].StartsWith("0x", StringComparison.CurrentCultureIgnoreCase))
-                {
-                    words[i] = words[i].Substring(2);
-                }
-
                 uint val;
-
-                if (!UInt32.TryParse(words[i],
-                    NumberStyles.HexNumber,
-                    CultureInfo.CurrentCulture,
-                    out val))
+                if (!TryParseHex(words[i], out val))
                 {
                     FlasherInterface.WriteLine(FlasherMessageType.Error,"ERROR: key file entry {0} not a valid hex number", words[i]);
                     return null;
