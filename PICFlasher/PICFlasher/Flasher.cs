@@ -11,7 +11,9 @@ namespace Hypnocube.PICFlasher
     /* TODO:
      *  1. Make automated version - PIC plugged in, gets flashed, 
      *     Success or Fail message.
-     *  2. Clean up logic, rethink way the bootloader and flasher interoperate
+     *  2. Clean up logic, rethink way the bootloader and flasher 
+     *     interoperate to make this code cleaner or easier to work
+     *     on.
      */
 
     /// <summary>
@@ -92,7 +94,7 @@ namespace Hypnocube.PICFlasher
                     {
                         try
                         {
-                            WriteByte(ACK);
+                            WriteByte(ACK_OK);
                             Thread.Sleep(100);
                         }
                         catch (Exception ex)
@@ -225,10 +227,39 @@ namespace Hypnocube.PICFlasher
 
         private FlasherState state;
 
+
+        private const byte ACK_OK = 0xFC;
+
         private int ackCount = 0;
         private int nackCount = 0;
 
-        private static byte ACK = 0xFC;
+        static bool IsAck(byte b)
+        {
+            return (b & 0xF0) == 0xF0;
+
+        }
+        static bool IsNack(byte b)
+        {
+            return (b & 0xF0) == 0xE0;
+        }
+
+
+        /// <summary>
+        /// Text description of ACK messages, must match
+        /// bootloader code in PIC
+        /// </summary>
+        private string[] ackMsg =
+        {
+            "ACK_PAGE_ERASED              = 0x00",
+            "ACK_ERASE_DONE               = 0x01",
+            "","","","","","","","","","",
+            // reserved for ACK
+            // the byte that signals a positive outcome to the flashing utility
+            // has nice property that becomes different values at nearby baud rates
+            "ACK_OK                       = 0x0C",
+            "","",""
+        };
+
 
         /// <summary>
         /// Text description of NACK messages, must match
@@ -250,13 +281,13 @@ namespace Hypnocube.PICFlasher
             "NACK_WRITE_FLASH_FAILED       = 0x09",
             "NACK_COMPARE_FAILED           = 0x0A",
             "NACK_WRITES_FAILED            = 0x0B",
-            // reserved for ACK                 
-            "NACK_ACK_RESERVED             = 0x0C",
             // system problems                  
-            "NACK_UNKNOWN_COMMAND          = 0x0D",
+            "NACK_UNKNOWN_COMMAND          = 0x0C",
             // erase problems                   
-            "NACK_ERASE_OUT_OF_BOUNDS      = 0x0E",
-            "NACK_ERASE_FAILED             = 0x0F"
+            "NACK_ERASE_OUT_OF_BOUNDS      = 0x0D",
+            "NACK_ERASE_FAILED             = 0x0E",
+            // currently unused
+            "NACK_UNUSED                   = 0x0F"
         };
 
         /// <summary>
@@ -273,23 +304,23 @@ namespace Hypnocube.PICFlasher
             foreach (var b1 in data)
             {
                 var b = b1; // want it changeable
-                if (b == ACK && state == FlasherState.TryConnect)
+                if (IsAck(b) && state == FlasherState.TryConnect)
                 {
                     state = FlasherState.Connected;
                 }
-                else if (b == ACK)
+                else if (IsAck(b))
                 {
                     ++ackCount;
-                    FlasherInterface.WriteLine(FlasherMessageType.BootloaderAck,"[ACK] {0}", ackCount);
+                    FlasherInterface.WriteLine(FlasherMessageType.BootloaderAck,"[ACK 0x{0:X1} {1}] {2}", b & 0x0F, ackMsg[b & 0x0F], ackCount);
                 }
-                else if ((b & 0xF0) == 0xF0)
+                else if (IsNack(b))
                 {
                     ++nackCount;
                     FlasherInterface.WriteLine(FlasherMessageType.BootloaderNack,"[NACK 0x{0:X1} {1}] {2}", b & 0x0F, nackMsg[b & 0x0F], nackCount);
                 }
                 else
                 {
-                    if (0x128 <= b && b <= 255)
+                    if (128 <= b && b <= 255)
                     {
                         b -= 128; // map to lower ASCII
                         FlasherInterface.Write(FlasherMessageType.BootloaderNack, "{0}", (char) (b));
@@ -567,6 +598,7 @@ namespace Hypnocube.PICFlasher
         private void EraseDevice()
         {
 
+            imageBlockIndex = 0;
             nackCount = 0;
             ackCount = 0;
             WatchForLine("Erase finished",
@@ -574,7 +606,6 @@ namespace Hypnocube.PICFlasher
                 {
                     if (state == FlasherState.Automated)
                     {
-                        imageBlockIndex = 0; //start at top
                         WriteBlock(); // kick it off
                     }
                     return true; // remove on execute
@@ -673,7 +704,7 @@ namespace Hypnocube.PICFlasher
 
         private void ProcessActions(byte ch)
         {
-            if (0xF0 <= ch)
+            if (IsAck(ch) || IsNack(ch))
             {
                 // ack or nack - check them
                 // line just added, check line actions
@@ -689,7 +720,6 @@ namespace Hypnocube.PICFlasher
                 // remove matches
                 foreach (var entry in toRemove)
                     ackNackActions.Remove(entry);
-
             }
             else if (ch == '\n')
             {

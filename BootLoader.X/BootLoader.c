@@ -9,8 +9,8 @@
 /************************** Overview *******************************************
  *
  * This is a bootloader for PIC32 MCUs, written by Chris Lomont for Hypnocube.
- * It allows flashing PICs from (optionally) encrypted images for upgrading PIC
- * applications in the field. Read the Usage section to see how to use it.
+ * It allows flashing PIC32s from (optionally) encrypted images for upgrading 
+ * PIC applications in the field. Read the Usage section to see how to use it.
  * www.hypnocube.com
  *  May 2015 - Version 0.5 - initial release
  *
@@ -44,16 +44,18 @@
  *     on compiler options, you may have to increase this 0x1800 as needed.
  *
  *         hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1800
- *         kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000+0x1800, LENGTH = 0x1F000-0x1800
+ *         kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000 + LENGTH(hypnocube_bootcode),
+ *                                       LENGTH = 0x1F000 - LENGTH(hypnocube_bootcode)
  *
  *     Also reserve one word in RAM by similarly splitting the line
  *
  *         kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x8000
  *
  *     into two
- * 
+ *
  *         hypnocube_bootram    (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x4
- *         kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000004, LENGTH = 0x8000-4
+ *         kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000000 + LENGTH(hypnocube_bootram),
+ *                                       LENGTH = 0x8000-LENGTH(hypnocube_bootram)
  *
  *     These two changes made room in flash and ram for our uses. Right after 
  *     the closing brace in the memory section, add this line
@@ -110,7 +112,7 @@
  *       # changed, the check code in the bootloader must be changed, since
  *       # exactly this code sequence must appear early in the reset area
  *       ##################################################################
- *       la      sp,0xA0000000 + 8*1024 # all PIC32s have at least 16K RAM, use 8
+ *       la      sp,0xA0000000 + 8*1024 # all PIC32s have >= 16K RAM, use 8
  *       la      t0,BootloaderEntry     # boot address, always same location
  *       jalr    t0                     # jump and link so we can return here
  *       nop                            # required branch delay slot, executed
@@ -203,7 +205,7 @@ error! need defines for your chip
 
 #endif
 
-// todo - clean and orgainze these better
+// todo - clean and organize these better
 // memory regions, end is one past usable end
 // all values are PHYSICAL addresses, not logical
 // most (all) are the same across chips
@@ -217,7 +219,7 @@ error! need defines for your chip
 #define BOOT_START           0x1FC00000
 #define BOOT_SIZE            (BMXBOOTSZ)
 #define BOOT_END             ((BOOT_START) + (BOOT_SIZE))
-// note config may be in the boot flash region
+// note config may be in the boot flash region (always is?)
 #define CONFIGURATION_START  0x1FC00BF0
 #define CONFIGURATION_END    0x1FC00C00
 
@@ -225,174 +227,44 @@ error! need defines for your chip
 #define FLASH_START_LOGICAL  0xBD000000
 #define BOOT_START_LOGICAL   0xBFC00000
 
-
-
-/*********************** Notes *************************************************
- * TODO - check all TODOs :)
+/*********************** Theory of operation ***********************************
  *
- * todo - errors allowed from flash side - mention which
+ * To understand how this works, first you must understand that the PIC32 uses
+ * memory mapping from physical addresses to logical addresses, and that the
+ * CPU sees logical addresses while flash erasing and writing use physical
+ * addresses. The notes section explains details. Physical addresses are always
+ * logical addresses masked with 0x1FFFFFFF. The other mapping is more complex.
  *
- * TODO - clean this section, organize, split
- * Original idea to make a boot flash bootloader is fraught with problems:
- *  1. Boot flash is small, 3K = 0xD00, on many PICs
- *  2. Boot flash has a debug executive in it, and several fixed addresses
- *     that need exception vectors (Reset, boot exception, etc.)
- *  3. Debug executive takes significant space (0x760)
- *  4. These vectors are set to point to code in the CRT in non-boot flash at
- *     link time, so any recompile of the use app may move these vectors
- *  5. Could fiddle with linker script, and crt enough to make all work, ....
- *  6. But this is hard to maintain over time as crt changes....
- *  7. So - we make boot code at a fixed, protected address, and the user
- *     program should call it first thing. Then boot loader allows flashing the
- *     boot area itself to allow user changes to crt, etc.
- *  8. Downside - some chance of the boot loader wiping the code that is called
- *     before it.
- *  9. All this would be ok on 12K boot flash PICs. Make version for there.
+ * This bootloader operates as follows. There is boot flash (small) and user
+ * flash (large), and an ideal bootloader would sit in the boot flash, but this
+ * turns out to be very messy, as explained in the notes section.
  *
- * BOOT FLASH layout (3K version)
- * 0x0000 - 0x037F : 0x380 space, execution starts here
- * 0x0380 - 0x047F : space? boot exception vector
- * 0x0480 - 0x048F : 0x10 space, debug exception vector jumps into normal FLASH
- * 0x0490 - 0x0BDF : 0x760 space, debug code executive, needed to debug
- * 0x0BF0 - 0x0BFF configuration registers
+ * Boot flash starts at logical address 0xBD000000 and has length 3K or 12K
+ * (perhaps other values someday) depending on PIC. The hardware maps a few
+ * exception vectors into here that cannot be moved.
  *
- * NOTE: config in boot flash - erasing this page erases config bits. Cannot do this!
- *       Thus we block all access to this page (0x800-0xBFF). This may break the
- *       debug executive, but should allow changes to be made to the exception vectors
- *       which is more important
+ * On power up, PIC32 jumps to the start of boot flash, which usually contains
+ * the C runtime startup code, several exception handlers, and the debug
+ * executive for debugging (which is the main reason this bootloader is loaded
+ * elsewhere). This bootloader installs a small jump into the start of this C
+ * runtime to jump to an address where the bootloader will always reside, the
+ * start of user flash at logical address 0xBD000000, where it uses about 6K of
+ * flash. The jump stub and the boot code itself are protected by the bootloader
+ * from being overwritten.
  *
+ * On anything other than a power on reset, the bootloader simply returns back
+ * to the C runtime startup. On a power on reset, the bootloader waits a compile
+ * time amount of time for a control byte from the flash utility. If this is
+ * detected, the bootloader then enters a command loop under the control of the
+ * flash utility.
  *
- * "How to Get the Least out of your PIC32 C compiler"
- * http://www.microchip.com/stellent/groups/SiteComm_sg/documents/DeviceDoc/en557154.pdf
-
+ * The flash utility issues commands to obtain for boot loader information,
+ * erase all flash (except the pages the bootloader protects), and then sends
+ * packets of data to be written into flash.
  *
- * takes a few times to connect under Windows - not sure why - 400ms, seconds...
- *  *
- * DEVCFG0 bits
- *    CP  : prevent flash reading/modification from external device 0=enabled, 1=disabled
- *    BWP : prevent boot flash from being modified during code execution 0=not writeable, 1=writeable
- *    PWP : prevent selected flash pages form being modified during code execution
- *        111111111 = disabled
- *        111111110 = address below 0x0400 protected
- *        111111101 = address below 0x0800 protected
- *        ....
- *        011111111 = address below 0x40000 (256K) protected
- *        ...
- *        000000000 = all possible memory protected
- *   ICESEL : ICD pins select PGECx/PGEDx x = 1,2,3,4 for bits 11,10,01,00
- *   JTAGEN, DEBUG,
- * DEVCFG1 bits : lots of watchdog timer stuff, clock oscillator stuff
- * DEVCFG2 bits : more clock stuff, USB stuff,
- * DEVCFG4 bits : USB stuff, peripheral pin stuff, USERID
+ * There are some nuances to this, with some more details in the notes section.
  *
- *    
- *
- * todo - uses lots of stack!
- *
- *  . Compile with optimized, else bigger linker spaces
- *
- * n. Define for your PIC if not present
- * Read notes for help, info
- *
- * TODO: explain if use modified CRT, remove link option from linker
- * Theory of operation: todo
- *
- *
- * // compile with size flags to make small enough
-// why not in boot sector (contention...), avoids address of main using crt.0
-
- *
-
- * _RESET_ADDR, _BEV_EXCPT_ADDR, _DBG_EXCPT_ADDR and _DBG_CODE_ADDR are all
- * determined by the chip's hardware, cannot change them.
- *
- * _RESET_ADDR                    -- Reset Vector
- * _BEV_EXCPT_ADDR                -- Boot exception Vector
- * _DBG_EXCPT_ADDR                -- In-circuit Debugging Exception Vector
- * _DBG_CODE_ADDR                 -- In-circuit Debug Executive address
- * _DBG_CODE_SIZE                 -- In-circuit Debug Executive size
- * _GEN_EXCPT_ADDR                -- General Exception Vector
- *************************************************************************
-_RESET_ADDR                    = 0xBFC00000;
-_BEV_EXCPT_ADDR                = 0xBFC00380;
-_DBG_EXCPT_ADDR                = 0xBFC00480;
-_DBG_CODE_ADDR                 = 0x9FC00490;
-_DBG_CODE_SIZE                 = 0x760;
-_GEN_EXCPT_ADDR                = _ebase_address + 0x180;
-
- * Logical addresses
- * KSEG0  0x80000000 - 0x9FFFFFFF is the same (overlaps) as
- * KSEG1  0xA0000000 - 0xBFFFFFFF
- * RAM    0x80000000 & 0xA0000000
- * FLASH  0x9D000000 & 0xBD000000
- * Peripherals         0xBF8000000 ONLY
-
- * BOOT   0x9FC00000 & 0xBFC00000, LENGTH = 0xD00  (3K) or 0x3000 (12K)
- * CONFIG 0x9FC00BF0 & 0xBFC00BF0, LENGTH = 0x010  NOTE: overlaps boot flash!
- *
- * So, BOOT flash in 3K bootloaders is mostly used by Debug Executive, only have
- * 0x000 - 0x380 and 0x390-0x480 =
- *
- *
- * http://microchip.wikidot.com/32bit:mx-arch-exceptions-entry-points
- * The Reset, Soft Reset, and NMI exceptions are always vectored to location 0xBFC00000 (uncached, start-up safe KSEG1 region).
-
-
-/*
- * TODO - future versions
- * Bootloader version at fixed address
- *
- *
-
- *
- C:\Users\Chris\SkyDrive\Hypnocube\Code\BootLoader.X\build\default\production>"\P
-rogram Files (x86)\Microchip\xc32\v1.30\bin\xc32-objdump.exe" -S BootLoader.o |
-more*
- *
-// to use DEBUG_BOOTLOADER must make linker script mem larger
-
-// all functions start with Boot and use BOOT_FUNC to locate properly
-// can use x32-objdump -x Bootloader.o to see where items went
-// can use gcc options to place data and functions in own sections to get more info
-        // (in XC32/bin directory)
-
-/* Features needed/desired
- *   1. UART (serial) support, possible Ethernet, SD card, SPI, etc?
- *   2. Can identify device to make sure not loading wrong items
- *   3. Protected from overwriting itself
- *   4. Setting of baud rate at compile time
- *   5. Encryption
- *   6. Compression
- *   7. Blinking LED when available
- *   8. Small RAM footprint (small enough for all PICs)
- *   9. Page size set by PIC type
- *  10. Error checking/re-transmission
- *  11. Fires on boot, waits, then if nothing, does normal main
- *  12. Small, works on all(?) PIC32?
- * . how to identify boot loading
- * . verify mode?
- * . CRC32K throughout
- *   . can also load unencrypted -
- *  . bootloader Version #
- * . error messages/bytes/stats
- * . NO: did not need - modified crt0.s must modify linker script - possibly can make same file with defines used here and included in linker script?
- * . explain how to check linker/load sections
- * . looked at symmetric and public key methods - if either decryption key lifted from device, irrelevant, so pick symmetric:
- * .chacha?
- *   - XXTEA seems good enough even though much weaker than AES. It's also very small
- *   - use ciphertext stealing to keep data short
- *   - use some block chaining format
- *   - send data in blocks with CRC allowing resends? Or one large block with CRC and verify?
- *   -
- */
-
-
-// switch ACK in some cases to ACK,reason,CRC? used for counting progress on erase?
-// //  x when erasing: send to the PC the number of pages to be erased, then send ack (BTLDR_ERASE) for each
-//    erased page (in order to use progress bar in PC software). When finished send BTLDR_OK
-
-
-/* Protocol
+ * Flashing Protocol:
  * 1. Flasher application sends repeating ACK command over the serial port
  *    Note there may be no serial port, since the device is not powered up,
  *    so the flasher will poll the port.
@@ -412,62 +284,188 @@ more*
  *    'E' (0x45) = Erase. Send 'E' Address CRC, responds ACK CRC
  *    'W' (0x57) = Write. Send 'W' Address Length CRC, returns ACK CRC or NACK CRC
  *    'Q' (0x51) = Quit. Send 'Q'CRC. Return ACK then Device exits boot loader.
- */
+ *
+ ******************************************************************************/
 
-// todo - make sure no strings in here that are not in this boot flash
-        
-/* Notes:
- * 1. Boot loader and app must have same config bits. Needed to compile together to make all work nicely. TODO - test standalone app.
+/*************************** Notes *********************************************
  *
  *
+ *  The original idea to make a boot flash bootloader is fraught with problems:
+ *  1. Boot flash is small, 3K = 0xD00, on many PICs
+ *  2. Boot flash has a debug executive in it, and several fixed addresses
+ *     that need exception vectors (Reset, boot exception, etc.)
+ *  3. Debug executive takes significant space (0x760)
+ *  4. These vectors are set to point to code in the CRT in non-boot flash at
+ *     link time, so any recompile of the use app may move these vectors
+ *  5. Could fiddle with linker script, and crt enough to make all work, ....
+ *  6. But this is hard to maintain over time as crt changes....
+ *  7. So - we make boot code at a fixed, protected address, and the user
+ *     program should call it first thing. Then boot loader allows flashing the
+ *     boot area itself to allow user changes to crt, etc.
+ *  8. Downside - some chance of the boot loader wiping the code that is called
+ *     before it.
+ *  9. All this would be ok on 12K boot flash PICs. Make version for there?
  *
- * From http://microchip.wikidot.com/faq:85  "(XC32) How do I link in my own custom startup-code, with the XC32 Compiler? "
- * 1. Copy the default startup code "crt0.S?, available under the folder ?<Compiler-DIR>\pic32-libs\libpic32\startup?, to your project directory.
- * 2. Customize this Startup code, by making the changes as required.
- * 3. Add this modified startup code (crt0.S) to the MPLAB® X IDE Project under ?Source Files?.
- *    You may also change the name of your custom startup code to something like 'my_startup.S'.
- * 4. Set the options to exclude linking of default Startup code.
- *    Under MPLAB X IDE go to:
- *    File ? Project Properties ? xc32-ld ? Option categories = Libraries ? Check the option 'Do not link startup code' ? Click 'Ok'
- * 5. The code will now link with the customized startup code.
- *    Note that the default startup code source, crt0.S, uses many device-specific macros that should be defined as appropriate for your target device.
+ * BOOT FLASH layout (3K version)
+ * 0x0000 - 0x037F : 0x380 space, execution starts here
+ * 0x0380 - 0x047F : space? boot exception vector
+ * 0x0480 - 0x048F : 0x10 space, debug exception vector jumps into normal FLASH
+ * 0x0490 - 0x0BDF : 0x760 space, debug code executive, needed to debug
+ * 0x0BF0 - 0x0BFF configuration registers
+ *
+ * Misc notes:
+ * 
+ * All variables are stored on the stack except one return code to minimize
+ * RAM usage. Most variables are all in one struct, which is cleared at the end,
+ * to minimize info leakage to user programs (even though now the C startup code 
+ * should zero memory). As a result, the code uses a decent chunk of RAM, so
+ * should not be called later from the C strtup.
+ * 
+ * All functions start with "Boot" to prevent accidentally calling outside
+ * functions and all use the BOOT_FUNC macro to locate them properly in flash.
+ *
+ * The bootloader should be compiled in the application so they share the same
+ * configuration bits. It is currently not possible to have the bootloader 
+ * change the configuration bits.
+ *
+ * The boot page is not erased during entire device flash, but is erased when it
+ * is about to be overwritten, but only if the jump to bootloader code is 
+ * present in the image about to be flashed. Thus the device can be bricked at 
+ * this brief moment if the page is erased and power fails before the write, or
+ * if the erased page cannot be written for some reason. I let this page be 
+ * updateable in this special case to allow some crt0 changes in the field.
+ * 
+ * However, the config page cannot be changed at all - there is no way to do it 
+ * from the device (unless the cfg bits are very luckily in a special config
+ * that allows flashing them without hanging the machine - check if this is 
+ * possible)
+ * 
+ *  Configuration settings are in boot flash
+ *      - erasing this page erases config bits. Cannot do this!
+ *        Thus we block all access to this page (0x800-0xBFF).
+ *        This may break the debug executive, but should allow changes
+ *        to be made to the exception vectors which is more important.
  *
  *
- * I modified the file by adding the 4 lines:
- *      # added by Chris Lomont at hypnocube to enable the boot loader
-        la      t0,BootloaderEntry
-        jalr    t0
-        nop
+ * DEVCFG0 bits
+ *    CP  : prevent flash reading/modification from external device 0=enabled, 1=disabled
+ *    BWP : prevent boot flash from being modified during code execution 0=not writeable, 1=writeable
+ *    PWP : prevent selected flash pages form being modified during code execution
+ *        111111111 = disabled
+ *        111111110 = address below 0x0400 protected
+ *        111111101 = address below 0x0800 protected
+ *        ....
+ *        011111111 = address below 0x40000 (256K) protected
+ *        ...
+ *        000000000 = all possible memory protected
+ *   ICESEL : ICD pins select PGECx/PGEDx x = 1,2,3,4 for bits 11,10,01,00
+ *   JTAGEN, DEBUG,
+ * DEVCFG1 bits : lots of watchdog timer stuff, clock oscillator stuff
+ * DEVCFG2 bits : more clock stuff, USB stuff,
+ * DEVCFG4 bits : USB stuff, peripheral pin stuff, USERID
  *
- * before the section starting with:
+ *
+ * _RESET_ADDR, _BEV_EXCPT_ADDR, _DBG_EXCPT_ADDR and _DBG_CODE_ADDR are all
+ * determined by the chip's hardware, cannot change them.
+ *
+ * _RESET_ADDR                    -- Reset Vector
+ * _BEV_EXCPT_ADDR                -- Boot exception Vector
+ * _DBG_EXCPT_ADDR                -- In-circuit Debugging Exception Vector
+ * _DBG_CODE_ADDR                 -- In-circuit Debug Executive address
+ * _DBG_CODE_SIZE                 -- In-circuit Debug Executive size
+ * 
+ * _RESET_ADDR                    = 0xBFC00000;
+ * _BEV_EXCPT_ADDR                = 0xBFC00380;
+ * _DBG_EXCPT_ADDR                = 0xBFC00480;
+ * _DBG_CODE_ADDR                 = 0x9FC00490; // NOTE this is in boot flash
+ * _DBG_CODE_SIZE                 = 0x760;
+ * 
+ * Logical addresses
+ * KSEG0  0x80000000 - 0x9FFFFFFF is the same (overlaps) as
+ * KSEG1  0xA0000000 - 0xBFFFFFFF
+ * RAM    0x80000000 & 0xA0000000
+ * FLASH  0x9D000000 & 0xBD000000
+ * Peripherals         0xBF8000000 ONLY
+ *
+ * BOOT   0x9FC00000 & 0xBFC00000, LENGTH = 0xD00  (3K) or 0x3000 (12K)
+ * CONFIG 0x9FC00BF0 & 0xBFC00BF0, LENGTH = 0x010  NOTE: overlaps boot flash!
+ *
+ * Can use xc32-objdump -x Bootloader.o to see where items went:
+ *    "\Program Files (x86)\Microchip\xc32\v1.30\bin\xc32-objdump.exe" -S
+ *    BootLoader.o | more
+ *
+ * "How to Get the Least out of your PIC32 C compiler"
+ * http://www.microchip.com/stellent/groups/SiteComm_sg/documents/DeviceDoc/en557154.pdf
+ *
+ * http://microchip.wikidot.com/32bit:mx-arch-exceptions-entry-points
+ *  The Reset, Soft Reset, and NMI exceptions are always vectored to location
+ *  0xBFC00000 (uncached, start-up safe KSEG1 region).
+ *
+ * The original list of desired features is here for posterity. Many features
+ * were implemented; some were cut due to time or technical reasons.
+ * 
+ * Features needed/desired
+ *   1. UART (serial) support, possible Ethernet, SD card, SPI, etc?
+ *   2. Can identify device to make sure not loading wrong items
+ *   3. Protected from overwriting itself
+ *   4. Setting of baud rate at compile time
+ *   5. Encryption
+ *   6. Compression
+ *   7. Blinking LED when available
+ *   8. Small RAM footprint (small enough for all PICs)
+ *   9. Page size set by PIC type
+ *  10. Error checking/re-transmission
+ *  11. Fires on boot, waits, then if nothing, does normal main
+ *  12. Small, works on all(?) PIC32?
+ *  13. how to identify boot loading?
+ *  14. verify code mode?
+ *  15. CRC32K throughout
+ *  16. can also load unencrypted -
+ *  17. bootloader Version #
+ *  18. error messages/bytes/stats
+ *  19. NO: did not need
+ *      - modified crt0.s must modify linker script
+ *      - possibly can make same file with defines used here
+ *        and included in linker script?
+ *  20. explain how to check linker/load sections
+ *  21. looked at symmetric and public key methods
+ *      - if either decryption key lifted from device,
+ *        made PKI irrelevant, so pick symmetric:
+ *      - chacha?
+ *      - XXTEA seems good enough even though much weaker than AES.
+ *        It's also very small
+ *      - use ciphertext stealing to keep data short
+ *      - use some block chaining format
+ *  22. Send data in blocks with CRC allowing resends?
+ *      Or one large block with CRC and verify?
+ *
+ *
+ ******************************************************************************/
 
-        ##################################################################
-        # Call main. We do this via a thunk in the text section so that
-        # a normal jump and link can be used, enabling the startup code
-        # to work properly whether main is written in MIPS16 or MIPS32
-        # code. I.e., the linker will correctly adjust the JAL to JALX if
-        # necessary
-        ##################################################################
-        and     a0,a0,0
-        and     a1,a1,0
-        la      t0,_main_entry
-        jr      t0
-        nop
-
- */
-
-/* Usage
- * 1. Make new linker script from default one
- *    a. copy C:\Program Files (x86)\Microchip\xc32\v1.30\pic32mx\lib\ldscripts\elf32pic32mx.x
- *       to new script with .ld extension in linker files portion of the project.
- *    b.
+/*************************** TODO **********************************************
+ * Things for future versions. X marks done
+ *   0. check all TODOs :)
+ *   1. Bootloader version at fixed address to allow outside reference
+ *   2. Special code to allow erasing all pages, moving bootloader,
+ *      and overwriting the bootloader itself under proper control
+ *   3. Compression
+ *   4. Ability to put in boot section for 12K boot flash sizes
+ *   5. Better/nicer sync between boot utility and flashing code
+ * X 6. switch ACK in some cases to ACK,reason,CRC?
+ *      useful for counting progress on erase, etc.
+ * X 7. When erasing: send to the PC the number of pages to be erased,
+ *      then send ACK(BTLDR_ERASE) for each erased page (in order to use
+ *      progress bar in PC software). When finished send BTLDR_OK.
+ *   8. Sometimes takes a few times to connect under Windows. Some connects are
+ *      very fast, some take seconds. Not sure why.
+ *   9. Make sure no strings in here that are not in the boot flash
+ *  10. See if the config bits can be changed - this implies they can
+ *      http://www.microchip.com/forums/m583991.aspx
+ *      The idea is that the device runs from a backup copy, the bootloader
+ *      erases and writes new ones, then upon reset the new ones take effect.
+ *      Is this possible? Would have to the new bits still allow boots.
  *
- *
- *
- *
- */
-
-//
+ ******************************************************************************/
 
 
 /*********************** defines, types, storage ******************************/
@@ -480,12 +478,10 @@ more*
 // useful for testing when you don't want flash being changed
 // #define IGNORE_FLASH_OPS
 
-// from linker
+// from linker, used to tell the bootloader its size
 extern const unsigned int _HCBOOT_LD_SIZE_;
 
 // addresses to protect the bootloader
-// todo - make BOOTLOADER_SIZE match the linker script automatically?
-//#define BOOTLOADER_SIZE              0x2000 // must match linker script
 #define BOOTLOADER_SIZE          ((uint32_t)(&_HCBOOT_LD_SIZE_))// must match linker script
 #define BOOT_PHYSICAL_ADDRESS    0x1D000000 // note PHYSICAL address
 #define BOOT_LOGICAL_ADDRESS     0x9D000000 // note LOGICAL address
@@ -503,12 +499,11 @@ extern const unsigned int _HCBOOT_LD_SIZE_;
 #define BUFFER_SIZE (FLASH_PAGE_SIZE+BUFFER_OVERHEAD)
 
 // used to put code items into the boot rom section we defined in the linker script
-#define BOOT_CODE   __attribute__((section(".hcbcode"))) BOOTLOADER_MIPS
-#define BOOT_CODE32 __attribute__((section(".hcbcode"))) __attribute__((mips32))
+#define BOOT_CODE   __attribute__((section(".hcbcode")))
 
 // used to put entry point into the boot rom section we defined in the linker script
 // needs an extra section extension, else placed incorrectly in the section
-#define BOOT_ENTRY __attribute__((section(".hcbcode.entry"))) BOOTLOADER_MIPS
+#define BOOT_ENTRY __attribute__((section(".hcbcode.entry")))
 
 // used to put data items into the boot rom section we defined in the linker script
 // the ',r' part marks the data with a readonly attribute, for linker use
@@ -533,58 +528,63 @@ extern const unsigned int _HCBOOT_LD_SIZE_;
 #define LOGICAL_TO_PHYSICAL_ADDRESS(addr) ((addr)&0x1FFFFFFF)
 
 // bootloader code version
-//#define BOOTLOADER_VERSION_MAJOR 0
-//#define BOOTLOADER_VERSION_MINOR 5
-/*FIX_ADDRESS(BOOT_LOGICAL_ADDRESS+BOOTLOADER_SIZE - 16)*/
-        // todo - get absolute address to work, so user can query, or make function?
 BOOTSTRING(bootloaderVersion,"0.5");
 
 // Send \r\n to UART
 #define ENDLINE()  {BootUARTWriteByte('\r');BootUARTWriteByte('\n'); }
 
 // write a single character with the high bit set, useful for debugging
-// note that ASCII 'p'-'z and {|}~ will overlap NACK and ACK codes, so
+// note that ASCII `,'a'-'z and {|}~ will overlap NACK and ACK codes, so
 // don't use them
-#define ERROR(ch) BootUARTWriteByte((128|ch))
+#define ERROR(ch) BootUARTWriteByte((128+(ch)))
 
 // write a single character, useful
-#define WRITE(ch) BootUARTWriteByte(ch)
+#define WRITE(ch) BootUARTWriteByte((ch))
 
 #define CRYPTO_ROUNDS 20 // for 20 rounds of Salsa20
 
-// the byte that signals a positive outcome to the flashing utility
-// has nice property that becomes different values at nearby baud rates
-#define ACK  0xFC
 
-// NACK is a byte, starts with 0xF0, has 16 lower nibble (0x0C is ACK)
-#define NACK(reason) BootUARTWriteByte(0xF0+reason)
-// NACK reasons
+// ACK is a byte, starts with 0xF0, has 16 lower nibbles
+#define ACK(reason) BootUARTWriteByte(reason)
+
+
+// ACK reasons
 enum {
-
-    // write problems
-    NACK_CRC_MISMATCH             = 0x00,
-    NACK_PACKET_SIZE_TOO_LARGE    = 0x01,
-    NACK_WRITE_WITHOUT_ERASE      = 0x02,
-    NACK_WRITE_SIZE_ERROR         = 0x03,
-    NACK_WRITE_MISALIGNED_ERROR   = 0x04,
-    NACK_WRITE_WRAPS_ERROR        = 0x05,
-    NACK_WRITE_OUT_OF_BOUNDS      = 0x06,
-    NACK_WRITE_OVER_CONFIGURATION = 0x07,
-    NACK_WRITE_BOOT_MISSING       = 0x08,
-    NACK_WRITE_FLASH_FAILED       = 0x09,
-    NACK_COMPARE_FAILED           = 0x0A,
-    NACK_WRITES_FAILED            = 0x0B,
+    ACK_PAGE_ERASED              = 0xF0,
+    ACK_ERASE_DONE               = 0xF1,
 
     // reserved for ACK
-    NACK_ACK_RESERVED             = 0x0C, 
+    // the byte that signals a positive outcome to the flashing utility
+    // has nice property that becomes different values at nearby baud rates
+    ACK_OK                       = 0xFC
+};
 
+// NACK is a byte, starts with 0xE0, has 16 lower nibbles
+#define NACK(reason) BootUARTWriteByte(reason)
+// NACK reasons
+enum {
+    // write problems
+    NACK_CRC_MISMATCH             = 0xE0,
+    NACK_PACKET_SIZE_TOO_LARGE    = 0xE1,
+    NACK_WRITE_WITHOUT_ERASE      = 0xE2,
+    NACK_WRITE_SIZE_ERROR         = 0xE3,
+    NACK_WRITE_MISALIGNED_ERROR   = 0xE4,
+    NACK_WRITE_WRAPS_ERROR        = 0xE5,
+    NACK_WRITE_OUT_OF_BOUNDS      = 0xE6,
+    NACK_WRITE_OVER_CONFIGURATION = 0xE7,
+    NACK_WRITE_BOOT_MISSING       = 0xE8,
+    NACK_WRITE_FLASH_FAILED       = 0xE9,
+    NACK_COMPARE_FAILED           = 0xEA,
+    NACK_WRITES_FAILED            = 0xEB,
     // system problems
-    NACK_UNKNOWN_COMMAND          = 0x0D,
+    NACK_UNKNOWN_COMMAND          = 0xEC,
 
     // erase problems
-    NACK_ERASE_OUT_OF_BOUNDS      = 0x0E,
-    NACK_ERASE_FAILED             = 0x0F,
+    NACK_ERASE_OUT_OF_BOUNDS      = 0xED,
+    NACK_ERASE_FAILED             = 0xEE,
 
+    // currently unused
+    NACK_UNUSED                   = 0xEF
 };
 
 // outcomes of the bootloader code, for querying
@@ -771,7 +771,7 @@ BOOT_CODE static void BootPrintSerialInt(uint32_t value)
 // print the integer to the serial port as a n byte hex value
 BOOT_CODE static void BootPrintSerialHexN(uint32_t value, int n)
 {
-    int i; // todo - remove from stack? ends on zero, so ok?
+    int i;
     for (i = n; i > 0; --i)
     {
         int val = (value>>(n*4-4))&15;
@@ -888,13 +888,13 @@ BOOT_CODE static uint32_t BootOverlap(
 }
 
 // set the core tick counter
-BOOT_CODE32 static void BootWriteTimer(uint32_t time)
+BOOT_CODE static void BootWriteTimer(uint32_t time)
 {
     asm volatile("mtc0   %0, $9": "+r"(time));
 }
 
 // read the core tick counter
-BOOT_CODE32 static uint32_t BootReadTimer()
+BOOT_CODE static uint32_t BootReadTimer()
 {
     uint32_t time;
     asm volatile("mfc0   %0, $9" : "=r"(time));
@@ -1437,7 +1437,7 @@ BOOT_CODE static void BootCommandInfo(Boot_t * bs)
 #undef DUMPINT
 
     // final ack to denote finised
-    BootUARTWriteByte(ACK);
+    ACK(ACK_OK);
     
 } // BootCommandInfo
 
@@ -1514,7 +1514,7 @@ BOOT_CODE static void BootEraseHelper(Boot_t * bs)
             if (bs->curAddress != BOOT_START && BootNVMemErasePage(bs,bs->curAddress))
             { // success
                 // allows progress bar
-                BootUARTWriteByte(ACK);
+                ACK(ACK_PAGE_ERASED);
             }
             else
             { // erase failed
@@ -1593,13 +1593,13 @@ BOOT_CODE static void BootCommandErase(Boot_t * bs)
         NACK(NACK_ERASE_FAILED); // send an error reply
     else
     {
-        BootUARTWriteByte(ACK);
+        ACK(ACK_ERASE_DONE);
     }
 }
 
 
 // write the data in bs fields: buffer, writeSize, writeAddress
-// return NACK_ACK_RESERVED on success, else a NACK_ code for the error
+// return ACK_OK on success, else a NACK_ code for the error
 BOOT_CODE static uint32_t BootWriteFlash(Boot_t * bs)
 {
     // check writing is allowed (required an erase first)
@@ -1727,7 +1727,7 @@ BOOT_CODE static uint32_t BootWriteFlash(Boot_t * bs)
         return NACK_WRITES_FAILED;
     }
 
-    return NACK_ACK_RESERVED; // success
+    return ACK_OK; // success
 } // BootWriteFlash
 
 /*
@@ -1795,8 +1795,8 @@ BOOT_CODE static void BootCommandWrite(Boot_t * bs)
     {
         BootDebugPrintE("Last packet seen");
         bs->writesFinished = true;
-        // final ACK
-        BootUARTWriteByte(ACK);
+        // final
+        ACK(ACK_OK);        
         return;
     }
 
@@ -1917,7 +1917,7 @@ BOOT_CODE static void BootCommandWrite(Boot_t * bs)
         );
 
         // ack success
-        BootUARTWriteByte(ACK);
+        ACK(ACK_OK);
         return;
     }
 #endif
@@ -1941,7 +1941,7 @@ BOOT_CODE static void BootCommandWrite(Boot_t * bs)
     do 
     {
         bs->flashWriteResult = BootWriteFlash(bs);
-        if (bs->flashWriteResult != NACK_ACK_RESERVED)
+        if (bs->flashWriteResult != ACK_OK)
         {
             BootDebugPrintE("Flash write failed ");
             // here is the reason
@@ -1980,10 +1980,10 @@ BOOT_CODE static void BootCommandWrite(Boot_t * bs)
         }
         bs->writeRetryCounter++;
     } while (bs->writeRetryCounter < WRITE_RETY_MAX &&
-             bs->flashWriteResult != NACK_ACK_RESERVED);
+             bs->flashWriteResult != ACK_OK);
 
     // final ACK
-    BootUARTWriteByte(ACK);
+    ACK(ACK_OK);
 }
 
 // compute and output CRC32 for all flash
@@ -2012,7 +2012,7 @@ BOOT_CODE static void BootCommandCRC(Boot_t * bs)
     ENDLINE();
 
     // final ACK
-    BootUARTWriteByte(ACK);
+    ACK(ACK_OK);
 
 }
 
@@ -2058,8 +2058,8 @@ BOOT_CODE static void BootRunCommandLoop(Boot_t * bs)
             case 'Q' : // quit
                 //BootDebugPrintE("Quit command");
                 return;
-            case ACK :// ACK - late entry? if so, ACK back to resync
-                BootUARTWriteByte(ACK);
+            case ACK_OK :// ACK - late entry? if so, ACK back to resync
+                ACK(ACK_OK);
                 break;
             default :
 #ifdef DEBUG_BOOTLOADER
@@ -2081,9 +2081,9 @@ BOOT_CODE static bool BootDetectFlashingAttempt(Boot_t * bs)
 
     while (BootUpdateTimer(&(bs->timeoutTimerMs)) < BOOT_WAIT_MS)
     {
-        if (BootUARTReadByte(bs->buffer) && bs->buffer[0] == ACK)
+        if (BootUARTReadByte(bs->buffer) && bs->buffer[0] == ACK_OK)
         {
-            BootUARTWriteByte(ACK);
+            ACK(ACK_OK);
             return true;
         }
     }

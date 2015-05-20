@@ -104,15 +104,17 @@ _GEN_EXCPT_ADDR                = _ebase_address + 0x180;
    Split the old entry in the MEMORY section:
         kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1F000
    into two
-        hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x01000
-        kseg0_program_mem     (rx)  : ORIGIN = 0x9D001000, LENGTH = 0x1E000
+        hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1800
+        kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000 + LENGTH(hypnocube_bootcode),
+                                      LENGTH = 0x1F000 - LENGTH(hypnocube_bootcode)
 
 
    Split the old entry in the MEMORY section:
         kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x8000
    into two
         hypnocube_bootram    (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x4
-        kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000004, LENGTH = 0x8000-4
+        kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000000 + LENGTH(hypnocube_bootram),
+                                      LENGTH = 0x8000-LENGTH(hypnocube_bootram)
 
 
 Also added .hcbcode section to map into this memory segment
@@ -124,7 +126,9 @@ Also added .hcbram  section to map into this memory segment
 MEMORY
 {
   hypnocube_bootcode    (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1800
-  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000+0x1800, LENGTH = 0x1F000-0x1800
+  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000 + LENGTH(hypnocube_bootcode), 
+                                LENGTH = 0x1F000 - LENGTH(hypnocube_bootcode)
+
   exception_mem               : ORIGIN = 0x9D01F000, LENGTH = 0x1000
 
   debug_exec_mem              : ORIGIN = 0x9FC00490, LENGTH = 0x760
@@ -137,7 +141,9 @@ MEMORY
   config0                     : ORIGIN = 0xBFC00BFC, LENGTH = 0x4
 
   hypnocube_bootram    (w!x)  : ORIGIN = 0xA0000000, LENGTH = 0x4
-  kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000004, LENGTH = 0x8000-4
+  kseg1_data_mem       (w!x)  : ORIGIN = 0xA0000000 + LENGTH(hypnocube_bootram),
+                                LENGTH = 0x8000-LENGTH(hypnocube_bootram)
+
   sfrs                        : ORIGIN = 0xBF800000, LENGTH = 0x100000
 
   configsfrs                  : ORIGIN = 0xBFC00BF0, LENGTH = 0x10
