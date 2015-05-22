@@ -11,18 +11,10 @@
 // multiply milliseconds by this to get ticks
 #define TICKS_PER_MILLISECOND     ((SYS_CLOCK)/2000)
 
-// version stored in nibbles MAJOR.MINOR
-#define VERSION  0x10 // version 1.0, May 2015
-
-/* Version history
- * 1.0 - initial release
-  */
-
 #define TEXT_SIZE 100 // size of input/output buffer
 
 // place to format messages
 char text[TEXT_SIZE];
-
 
 /**********************
  * Configuration Bits *
@@ -228,7 +220,7 @@ int main(void)
 
     Initialize();
 
-    sprintf(text,"\r\n\r\nHypnocube Boot Loader testing ver %d.%d.\r\n",VERSION>>4, VERSION&15);
+    sprintf(text,"\r\n\r\nHypnocube Boot Loader testing ver %s.\r\n",BootloaderVersion());
     PrintSerialMain(text);
 
     sprintf(text,"Boot loader result %d.\r\n",(int)bootResult);

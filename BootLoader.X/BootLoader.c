@@ -551,7 +551,8 @@ BOOTSTRING(bootloaderVersion,"0.5");
 // ACK reasons
 enum {
     ACK_PAGE_ERASED              = 0xF0,
-    ACK_ERASE_DONE               = 0xF1,
+    ACK_PAGE_PROTECTED           = 0xF1,
+    ACK_ERASE_DONE               = 0xF2,
 
     // reserved for ACK
     // the byte that signals a positive outcome to the flashing utility
@@ -580,11 +581,11 @@ enum {
     NACK_UNKNOWN_COMMAND          = 0xEC,
 
     // erase problems
-    NACK_ERASE_OUT_OF_BOUNDS      = 0xED,
-    NACK_ERASE_FAILED             = 0xEE,
+    NACK_ERASE_FAILED             = 0xED,
 
     // currently unused
-    NACK_UNUSED                   = 0xEF
+    NACK_UNUSED1                  = 0xEE,
+    NACK_UNUSED2                  = 0xEF
 };
 
 // outcomes of the bootloader code, for querying
@@ -1380,10 +1381,23 @@ BOOT_CODE bool BootTestAssumptions()
     return true;
 }
 
-BOOTSTRING(infoText00,"Bootloader Version    : ");
-BOOTSTRING(infoText01,"DEVID                 : ");
-BOOTSTRING(infoText02,"DEVID Ver             : ");
-BOOTSTRING(infoText03,"Bootloader size       : ");
+BOOTSTRING(infoText00, "Bootloader Version    : ");
+BOOTSTRING(infoText01, "DEVID                 : ");
+BOOTSTRING(infoText02, "DEVID Ver             : ");
+BOOTSTRING(infoText03, "Bootloader size       : ");
+
+BOOTSTRING(flashText01,"Flasher detected      : ");
+BOOTSTRING(flashText02," ms.");
+
+
+// write version text to serial
+BOOT_CODE static void BootWriteVersion()
+{
+    // chip and code versions
+    BootPrintSerial(infoText00);
+    BootPrintSerial(BootloaderVersion());
+    ENDLINE();
+}
 
 BOOT_CODE static void BootCommandInfo(Boot_t * bs)
 {
@@ -1399,9 +1413,7 @@ BOOT_CODE static void BootCommandInfo(Boot_t * bs)
     // BootPrintSerialHex((uint32_t)BOOTLOADER_VERSION);
 
     // chip and code versions
-    BootPrintSerial(infoText00);
-    BootPrintSerial(BootloaderVersion());
-    ENDLINE();
+    BootWriteVersion();
 
     DUMPHEX(infoText01, DEVIDbits.DEVID);
     DUMPHEX(infoText02, DEVIDbits.VER);
@@ -1505,13 +1517,13 @@ BOOT_CODE static void BootEraseHelper(Boot_t * bs)
         BootPrintSerialHex(bs->curAddress);
 
         // do not erase bootloader addresses - just skip them
-        if (BootModifyAddressesAllowed(bs->curAddress,FLASH_PAGE_SIZE))
+        // Also, special case. Even if we're allowed to erase the BOOT_START page,
+        // we do not do so here. We only do it when it is about to be
+        // written, in order to protect the bootloader path
+        if (BootModifyAddressesAllowed(bs->curAddress,FLASH_PAGE_SIZE) && bs->curAddress != BOOT_START)
         {
 
-            // special case. Even if we're allowed to erase the BOOT_START page,
-            // we do not do so here. We only do it when it is about to be
-            // written, in order to protect the bootloader path
-            if (bs->curAddress != BOOT_START && BootNVMemErasePage(bs,bs->curAddress))
+            if (BootNVMemErasePage(bs,bs->curAddress))
             { // success
                 // allows progress bar
                 ACK(ACK_PAGE_ERASED);
@@ -1524,9 +1536,10 @@ BOOT_CODE static void BootEraseHelper(Boot_t * bs)
             }
         }
         else
-        { // write blocked
+
+        {   // write blocked
             // allows progress bar
-            NACK(NACK_ERASE_OUT_OF_BOUNDS);
+            ACK(ACK_PAGE_PROTECTED);
         }
 
         bs->pageEraseAttemptCount++;
@@ -2175,7 +2188,6 @@ BOOT_ENTRY FIX_ADDRESS(BOOT_LOGICAL_ADDRESS) uint8_t BootloaderEntry()
     if (BootSetHardware())
     {
         BootDebugPrintE("Hardware set");
-        
         // show LED if present
         LED_ON();
 
@@ -2185,8 +2197,7 @@ BOOT_ENTRY FIX_ADDRESS(BOOT_LOGICAL_ADDRESS) uint8_t BootloaderEntry()
         // 2. See if flashing attempted
         if (BootDetectFlashingAttempt(bs))
         {
-            BOOTSTRING(flashText01,"Flasher detected at ");
-            BOOTSTRING(flashText02," ms.");
+            BootWriteVersion();
 
             // print time connected, useful for debugging
             BootPrintSerial(flashText01);

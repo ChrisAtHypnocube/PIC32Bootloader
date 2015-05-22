@@ -14,6 +14,9 @@ namespace Hypnocube.PICFlasher
      *  2. Clean up logic, rethink way the bootloader and flasher 
      *     interoperate to make this code cleaner or easier to work
      *     on.
+     *  3. Abstract out the commands to make them easier to change/modify
+     *  4. split out flasher interface to nicer console GUI, extract
+     *     theme colors for this program and make extensible
      */
 
     /// <summary>
@@ -57,30 +60,18 @@ namespace Hypnocube.PICFlasher
 
             state = FlasherState.PortClosed;
 
-            uint[] key = null;
 
-            FlasherInterface.SetColors(FlasherMessageType.Configuration,true);
-            var fileColorToken = FlasherInterface.ColorToken(FlasherColor.Yellow,FlasherColor.Blue);
-            var defaultColorToken = FlasherInterface.ColorToken();
-            if (!String.IsNullOrEmpty(hexFilename))
-                FlasherInterface.WriteLine("Hex filename   : {0}{1}{2}",fileColorToken,hexFilename,defaultColorToken);
-            if (!String.IsNullOrEmpty(imgFilename))
-                FlasherInterface.WriteLine("Image filename : {0}{1}{2}", fileColorToken,imgFilename,defaultColorToken);
+            WriteState(hexFilename, imgFilename, keyFilename);
+
+            uint[] key = null;
             if (!String.IsNullOrEmpty(keyFilename))
-            {
-                FlasherInterface.WriteLine("Key filename   : {0}{1}{2}", fileColorToken,keyFilename,defaultColorToken);
                 key = LoadKey(keyFilename);
-            }
-            FlasherInterface.WriteLine("Bootloader code reserves 0x{0:X8} bytes", bootLength);
-            FlasherInterface.WriteLine("Allow overwriting boot flash section : {0}", allowOverwriteBootFlash);
-            FlasherInterface.WriteLine("Allow overwriting configuration registers : {0}", allowOverwriteConfiguration);
-            FlasherInterface.WriteLine();
-            FlasherInterface.RestoreColors();
+
 
             var success = false; // set to true if successfully flashed
 
 
-            Usage();
+            ShowCommandHelp();
 
             while (true)
             {
@@ -109,6 +100,28 @@ namespace Hypnocube.PICFlasher
                         ProcessMessages(data);
                     }
 
+                    // handle launching of commands during auto flash
+                    if (state == FlasherState.AutoInfoStart)
+                    {
+                        state = FlasherState.AutoInfoPending;
+                        InfoCommand();
+                    }
+                    else if (state == FlasherState.AutoImageStart)
+                    {
+                        state = FlasherState.AutoImagePending;
+                        AutoImage(hexFilename, imgFilename, key);
+                    }
+                    else if (state == FlasherState.AutoEraseStart)
+                    {
+                        state = FlasherState.AutoErasePending;
+                        EraseDevice();
+                    }
+                    else if (state == FlasherState.AutoWriteStart)
+                    {
+                        state = FlasherState.AutoWritePending;
+                        WriteBlock();
+                    }
+
 
                     if (FlasherInterface.CommandAvailable)
                     {
@@ -118,6 +131,9 @@ namespace Hypnocube.PICFlasher
                             case 'q': // quit flasher
                                 FlasherInterface.RestoreColors();
                                 return success;
+                            case 'f' :
+                                WriteState(hexFilename,imgFilename,keyFilename);
+                                break;
                             case 'x': // quit boot loader
                                 WriteCommand('Q');
                                 break;
@@ -152,12 +168,15 @@ namespace Hypnocube.PICFlasher
                             case 'w': // write all to device
                                 StartProcessAll();
                                 break;
+                            case 'u' :
+                                ShowUsageHelp();
+                                break;
                             case 'b': // jump into boot
                                 state = FlasherState.TryConnect;
                                 WriteCommand('B');
                                 break;
                             case '?' :
-                                Usage();
+                                ShowCommandHelp();
                                 break;
                             default:
                                 FlasherInterface.WriteLine();
@@ -173,15 +192,37 @@ namespace Hypnocube.PICFlasher
             } // while infinite loop
         }
 
+        /// <summary>
+        /// Write out the details on file configurations
+        /// </summary>
+        /// <param name="hexFilename"></param>
+        /// <param name="imgFilename"></param>
+        /// <param name="keyFilename"></param>
+        private void WriteState(string hexFilename, string imgFilename, string keyFilename)
+        {
+            FlasherInterface.SetColors(FlasherMessageType.Configuration, true);
+            FlasherInterface.WriteLine();
+            var fileColorToken = FlasherInterface.ColorToken(FlasherColor.Yellow, FlasherColor.Blue);
+            var defaultColorToken = FlasherInterface.ColorToken();
+            if (!String.IsNullOrEmpty(hexFilename))
+                FlasherInterface.WriteLine("Hex filename   : {0}{1}{2}", fileColorToken, hexFilename, defaultColorToken);
+            if (!String.IsNullOrEmpty(imgFilename))
+                FlasherInterface.WriteLine("Image filename : {0}{1}{2}", fileColorToken, imgFilename, defaultColorToken);
+            if (!String.IsNullOrEmpty(keyFilename))
+                FlasherInterface.WriteLine("Key filename   : {0}{1}{2}", fileColorToken, keyFilename, defaultColorToken);
+            FlasherInterface.WriteLine("Bootloader code reserves 0x{0:X8} bytes", bootLength);
+            FlasherInterface.WriteLine("Allow overwriting boot flash section : {0}", allowOverwriteBootFlash);
+            FlasherInterface.WriteLine("Allow overwriting configuration registers : {0}", allowOverwriteConfiguration);
+            FlasherInterface.WriteLine();
+            FlasherInterface.RestoreColors();
+        }
+
         private void StartProcessAll()
         {
-            if (state == FlasherState.Connected && image != null && bootLength != 0)
-            {
-                state = FlasherState.Automated;
-                EraseDevice();
-            }
+            if (state == FlasherState.Connected)
+                state = FlasherState.AutoInfoStart;
             else
-                FlasherInterface.WriteLine(FlasherMessageType.Error, "ERROR: ensure connected and image loaded or created before flashing");
+                FlasherInterface.WriteLine(FlasherMessageType.Error, "ERROR: ensure connected before flashing");
         }
 
         private void InfoCommand()
@@ -189,6 +230,7 @@ namespace Hypnocube.PICFlasher
             // prepare to parse the info lines, looking for the bootloader size
             WatchForLine("Bootloader size", line =>
             {
+                var success = false;
                 uint val;
                 if (!TryParseHex(line.Split().Last(), out val))
                 {
@@ -197,18 +239,84 @@ namespace Hypnocube.PICFlasher
                 else
                 {
                     bootLength = (int) val;
-                    FlasherInterface.WriteLine(FlasherMessageType.Info,
-                        "boot loader size {0}0x{1:X4}{2} parsed from line",
-                        FlasherInterface.ColorToken(FlasherColor.Green, FlasherColor.Black),
-                        bootLength,
-                        FlasherInterface.ColorToken()
-                        );
+                    if ((bootLength%picDetails.FlashPageSize) != 0)
+                    {
+                        FlasherInterface.WriteLine(FlasherMessageType.Error,
+                            "boot loader size {0}0x{1:X4}{2} parsed from line, not multiple of flash page size {0}0x{3:X4}{2}",
+                            FlasherInterface.ColorToken(FlasherColor.Green, FlasherColor.Black),
+                            bootLength,
+                            FlasherInterface.ColorToken(),
+                            picDetails.FlashPageSize
+                            );
+                    }
+                    else
+                    {
+                        FlasherInterface.WriteLine(FlasherMessageType.Info,
+                            "boot loader size {0}0x{1:X4}{2} parsed from line",
+                            FlasherInterface.ColorToken(FlasherColor.Green, FlasherColor.Black),
+                            bootLength,
+                            FlasherInterface.ColorToken()
+                            );
+                        success = true;
+                    }
                     
                 }
+
+                if (state == FlasherState.AutoInfoPending)
+                {
+                    if (success)
+                        state = FlasherState.AutoImageStart; // next stage
+                    else
+                        state = FlasherState.Connected; // drop back to here
+                }
+
                 return true; // remove on execution
             });
 
             WriteCommand('I');
+        }
+
+        /// <summary>
+        /// Try to get an image for use.
+        /// If both hex file and image file present, pick most recent.
+        /// Otherwise pick the one present. If neither, error and fail.
+        /// </summary>
+        void AutoImage(string hexFilename, string imgFilename, uint [] key)
+        {
+             var hexExists = !String.IsNullOrEmpty(hexFilename) && File.Exists(hexFilename);
+             var imgExists = !String.IsNullOrEmpty(imgFilename) && File.Exists(imgFilename);
+
+            var success = false;
+            if (hexExists && imgExists)
+            {
+                var hexTime = new FileInfo(hexFilename).CreationTime;
+                var imgTime = new FileInfo(imgFilename).CreationTime;
+
+                if (hexTime < imgTime)
+                    success = LoadImage(imgFilename);
+                else
+                    success = CreateImageFromHex(hexFilename, imgFilename, key);
+            }
+            else if (hexExists)
+            {
+                success = CreateImageFromHex(hexFilename, imgFilename, key);
+            }
+            else if (imgExists)
+            {
+                success = LoadImage(imgFilename);
+            }
+            else
+            {
+                FlasherInterface.WriteLine(FlasherMessageType.Error,"Needs a hex or img file!");
+            }
+
+            if (state == FlasherState.AutoImagePending)
+            {
+                if (success)
+                    state = FlasherState.AutoEraseStart;
+                else
+                    state = FlasherState.Connected; // jump back to this
+            }
         }
 
         #region Implementation
@@ -222,7 +330,16 @@ namespace Hypnocube.PICFlasher
             TryConnect,  // trying to connect, port open
             Connected,   // connection found, in command loop
             
-            Automated,   // connected, image loaded/created, performing auto update
+            // states during automatic flash
+            AutoInfoStart,    // requires connection, launches a get info
+            AutoInfoPending,  // requires connection, launches a get info
+            AutoImageStart,   // requires connection, info, gets an image
+            AutoImagePending, // requires connection, info, gets an image
+            AutoEraseStart,    // requires connection, info, image, erases flash
+            AutoErasePending,  // requires connection, info, image, erases flash
+            AutoWriteStart,    // requires connection, info, image, erased, writes image
+            AutoWritePending   // requires connection, info, image, erased, writes image
+
         }
 
         private FlasherState state;
@@ -251,8 +368,10 @@ namespace Hypnocube.PICFlasher
         private string[] ackMsg =
         {
             "ACK_PAGE_ERASED              = 0x00",
-            "ACK_ERASE_DONE               = 0x01",
-            "","","","","","","","","","",
+            "ACK_PAGE_PROTECTED           = 0x01",
+            "ACK_ERASE_DONE               = 0x02",
+
+            "","","","","","","","","",
             // reserved for ACK
             // the byte that signals a positive outcome to the flashing utility
             // has nice property that becomes different values at nearby baud rates
@@ -284,10 +403,10 @@ namespace Hypnocube.PICFlasher
             // system problems                  
             "NACK_UNKNOWN_COMMAND          = 0x0C",
             // erase problems                   
-            "NACK_ERASE_OUT_OF_BOUNDS      = 0x0D",
-            "NACK_ERASE_FAILED             = 0x0E",
+            "NACK_ERASE_FAILED             = 0x0D",
             // currently unused
-            "NACK_UNUSED                   = 0x0F"
+            "NACK_UNUSED1                  = 0x0E",
+            "NACK_UNUSED2                  = 0x0F"
         };
 
         /// <summary>
@@ -346,17 +465,18 @@ namespace Hypnocube.PICFlasher
             }
         }
 
-        void Usage()
+        private void ShowCommandHelp()
         {
             FlasherInterface.SetColors(FlasherMessageType.Help, true);
 
-            var commandToken = FlasherInterface.ColorToken(FlasherColor.Yellow,FlasherColor.Black);
+            var commandToken = FlasherInterface.ColorToken(FlasherColor.Yellow, FlasherColor.Black);
             var defaultToken = FlasherInterface.ColorToken();
             Func<char, string> wrapCommand = c => String.Format("{0}{1}{2}", commandToken, c, defaultToken);
 
 
-            FlasherInterface.WriteLine("Press {0} to quit flasher",wrapCommand('q'));
+            FlasherInterface.WriteLine("Press {0} to quit flasher", wrapCommand('q'));
             FlasherInterface.WriteLine("Press {0} to quit boot loader", wrapCommand('x'));
+            FlasherInterface.WriteLine("Press {0} to show files used", wrapCommand('f'));
             FlasherInterface.WriteLine("Press {0} to get connected bootloader information", wrapCommand('i'));
             FlasherInterface.WriteLine("Press {0} to create image from hex for flashing to device", wrapCommand('m'));
             FlasherInterface.WriteLine("Press {0} to load image file for flashing to device", wrapCommand('l'));
@@ -364,17 +484,42 @@ namespace Hypnocube.PICFlasher
             FlasherInterface.WriteLine("Press {0} to compute crc on device and output it", wrapCommand('c'));
             //            FlasherInterface.WriteLine("Press {0} to read flash on device (requires bootloader support)", wrapCommand('r'));
             FlasherInterface.WriteLine("Press {0} to erase then write flash on device", wrapCommand('w'));
+            FlasherInterface.WriteLine("Press {0} to show usage help", wrapCommand('u'));
             FlasherInterface.WriteLine("Press {0} to write next flash packet to device", wrapCommand('s'));
-            FlasherInterface.WriteLine("Press {0} to jump into bootloader from main (only in test project)", wrapCommand('b'));
+            FlasherInterface.WriteLine("Press {0} to jump into bootloader from main (only in test project)",
+                wrapCommand('b'));
             FlasherInterface.WriteLine("Press {0} for this help", wrapCommand('?'));
             FlasherInterface.WriteLine("");
+        }
+
+        void ShowUsageHelp()
+        {
 
             FlasherInterface.SetColors(FlasherMessageType.Instruction);
-            defaultToken = FlasherInterface.ColorToken();
-            FlasherInterface.WriteLine("First connect by plugging the device, once connected, ");
-            FlasherInterface.WriteLine("make ({0}) or load ({1}) an image, then either flash in one ", wrapCommand('m'), wrapCommand('l'));
-            FlasherInterface.WriteLine(" step ({0}) or erase ({1}) then single step write packets ({2}).", wrapCommand('w'), wrapCommand('e'), wrapCommand('s'));
-            FlasherInterface.WriteLine("");
+            var commandToken = FlasherInterface.ColorToken(FlasherColor.Yellow, FlasherColor.Black);
+            var defaultToken = FlasherInterface.ColorToken();
+            Func<char, string> wrapCommand = c => String.Format("{0}{1}{2}", commandToken, c, defaultToken);
+
+            FlasherInterface.WriteLine("Operation:");
+            FlasherInterface.WriteLine(" 1. Connect by plugging in the device until you see the bootloader message.");
+            FlasherInterface.WriteLine("    (if connection opens too slowly, unplug and retry)");
+            FlasherInterface.WriteLine("Then either do the single step or multi-step flash:");
+            FlasherInterface.SetColors(FlasherColor.White, FlasherColor.Unchanged, true);
+            FlasherInterface.WriteLine();
+            FlasherInterface.WriteLine("Single step:");
+            FlasherInterface.RestoreColors();
+            FlasherInterface.WriteLine(" 2. Flash in one step ({0}). Automates the multi-step flash.", wrapCommand('w'));
+            FlasherInterface.SetColors(FlasherColor.White, FlasherColor.Unchanged, true);
+            FlasherInterface.WriteLine();
+            FlasherInterface.WriteLine("Multi-step :");
+            FlasherInterface.RestoreColors();
+            FlasherInterface.WriteLine(" 2. Get bootloader info ({0}), needed to create images", wrapCommand('i'));
+            FlasherInterface.WriteLine(" 3. Make ({0}) or load ({1}) an image (file needed to be on command line)", wrapCommand('m'), wrapCommand('l'));
+            FlasherInterface.WriteLine(" 4. Erase ({0}) entire flash.",wrapCommand('e'));
+            FlasherInterface.WriteLine(" 5. Repeat single step packet writing ({0}) until all sent.", wrapCommand('s'));
+            FlasherInterface.WriteLine();
+
+            
             FlasherInterface.RestoreColors();
 
         }
@@ -496,18 +641,19 @@ namespace Hypnocube.PICFlasher
         /// CreateImageFromHex
         /// Load an plaintext flash image from a file and apply the 
         /// encryption key to make an encrypted image.
+        /// Return true on success
         /// </summary>
         /// <param name="imgFilename"></param>
         /// <param name="key"></param>
         /// <param name="hexFilename"></param>
-        private void CreateImageFromHex(string hexFilename, string imgFilename, uint [] key)
+        private bool CreateImageFromHex(string hexFilename, string imgFilename, uint [] key)
         {
             image = null;
             var hasImageFilename = !String.IsNullOrEmpty(imgFilename);
             if (String.IsNullOrEmpty(hexFilename))
             {
                 FlasherInterface.WriteLine(FlasherMessageType.Error,"Create image requires hex filename");
-                return;
+                return false;
             }
 
             var maker = new MakeImage();
@@ -517,6 +663,7 @@ namespace Hypnocube.PICFlasher
                 key!=null?" with encryption key":""
                 );
             image = maker.CreateFromFile(hexFilename, picDetails, TrimMemory, key);
+            var success = true;
             if (image != null)
             {
                 FlasherInterface.WriteLine(FlasherMessageType.Info,"Image created from hex correctly, {0} blocks", image.Blocks.Count);
@@ -525,12 +672,17 @@ namespace Hypnocube.PICFlasher
                     FlasherInterface.WriteLine(FlasherMessageType.Info,"Saving image as {0}", imgFilename);
                     image.Write(imgFilename);
                 }
+                else
+                {
+                    success = false;
+                }
             }
             else
             {
                 FlasherInterface.WriteLine(FlasherMessageType.Error,"Image creation failed");
+                success = false;
             }
-
+            return success;
         }
 
         private Image image; 
@@ -558,8 +710,31 @@ namespace Hypnocube.PICFlasher
             if (imageBlockIndex == image.Blocks.Count)
             {
                 numberToken = FlasherInterface.ColorToken(FlasherColor.Green, FlasherColor.Black);
-                if (state == FlasherState.Automated)
-                    state = FlasherState.Connected; // and this is the last one
+                if (state == FlasherState.AutoWritePending)
+                {
+                    state = FlasherState.Connected; // and this is the last write
+                    // set up final handler
+                    WatchForAckOrNack(() =>
+                    {
+
+                        FlasherInterface.WriteLine();
+                        FlasherInterface.WriteLine("ACK count {0}, NACK count {1}",ackCount,nackCount);
+                        if (nackCount == 0)
+                        {
+                            FlasherInterface.SetColors(FlasherColor.Green,FlasherColor.DarkGreen,true);
+                            FlasherInterface.WriteLine("ROM flash succeeded!");
+                            FlasherInterface.RestoreColors();
+                        }
+                        else
+                        {
+                            FlasherInterface.SetColors(FlasherColor.Red,FlasherColor.DarkRed,true);
+                            FlasherInterface.WriteLine("ROM flash failed.");
+                            FlasherInterface.RestoreColors();
+                        }
+                        FlasherInterface.WriteLine();
+                        return true;// remove on fire
+                    });
+                }
             }
             var defaultToken = FlasherInterface.ColorToken();
             FlasherInterface.Write(FlasherMessageType.Info, "Writing block {2}{0}{3} of {2}{1}{3}", 
@@ -567,7 +742,7 @@ namespace Hypnocube.PICFlasher
                 numberToken, defaultToken
                 );
 
-            if (state == FlasherState.Automated)
+            if (state == FlasherState.AutoWritePending)
             {
                 // write another block when done, 
                 // but delay a moment to give bootloader some space
@@ -604,10 +779,14 @@ namespace Hypnocube.PICFlasher
             WatchForLine("Erase finished",
                 line =>
                 {
-                    if (state == FlasherState.Automated)
+                    WatchForAckOrNack(() =>
                     {
-                        WriteBlock(); // kick it off
-                    }
+                        if (state == FlasherState.AutoErasePending)
+                        {
+                            state = FlasherState.AutoWriteStart;
+                        }
+                        return true; // remove on execute
+                    });
                     return true; // remove on execute
                 });
             WriteCommand('E');
@@ -659,20 +838,26 @@ namespace Hypnocube.PICFlasher
             return key;
         }
 
-        private void LoadImage(string imgFilename)
+        /// <summary>
+        /// Load image file, return true on success
+        /// </summary>
+        /// <param name="imgFilename"></param>
+        /// <returns></returns>
+        private bool LoadImage(string imgFilename)
         {
             if (String.IsNullOrEmpty(imgFilename))
             {
                 FlasherInterface.WriteLine(FlasherMessageType.Error,"ERROR: Load image requires filename");
-                return;
+                return false;
             }
             if (!File.Exists(imgFilename))
             {
                 FlasherInterface.WriteLine(FlasherMessageType.Error,"ERROR: Cannot find image filename {0}", imgFilename);
-                return;
+                return false;
             }
             FlasherInterface.WriteLine(FlasherMessageType.Info,"Loading image file {0}", imgFilename);
             image = Image.Read(imgFilename);
+            return image != null;
         }
 
 

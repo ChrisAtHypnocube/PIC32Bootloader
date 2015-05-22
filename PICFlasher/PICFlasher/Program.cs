@@ -10,18 +10,23 @@ namespace Hypnocube.PICFlasher
         static void Usage()
         {
             FlasherInterface.SetColors(FlasherMessageType.Help,true);
-            FlasherInterface.WriteLine("Hypnocube PIC32 picType bootloader flasher");
-            FlasherInterface.WriteLine("Usage: {0} baud files", AppDomain.CurrentDomain.FriendlyName);
-            FlasherInterface.WriteLine("   'picType' is a pic32 type, labeled such as PIC32MX150F128B, and must appear.");
-            FlasherInterface.WriteLine("   'baud' is the baudrate to use, and must match the bootloader, and must appear.");
-            FlasherInterface.WriteLine("   'files' is a list of filenames to use.");
+            var tok1 = FlasherInterface.ColorToken(FlasherColor.Green, FlasherColor.Unchanged);
+            var tok2 = FlasherInterface.ColorToken();
+            FlasherInterface.SetColors(FlasherColor.Yellow,FlasherColor.Unchanged,true);
+            FlasherInterface.WriteLine();
+            FlasherInterface.WriteLine("Hypnocube PIC32 bootloader flasher");
+            FlasherInterface.RestoreColors();
+            FlasherInterface.WriteLine("Usage: {0}{1} picType baud files{2}", tok1,AppDomain.CurrentDomain.FriendlyName,tok2);
+            FlasherInterface.WriteLine("   '{0}picType{1}' is a pic32 type, labeled such as PIC32MX150F128B, and must appear.",tok1,tok2);
+            FlasherInterface.WriteLine("   '{0}baud{1}' is the baudrate and must match the bootloader, and must appear.",tok1,tok2);
+            FlasherInterface.WriteLine("   '{0}files{1}' is a list of filenames to use.", tok1, tok2);
             FlasherInterface.WriteLine("   At most one file each of .hex, .key, and .img can occur.");
             FlasherInterface.WriteLine("   A .hex file is an Intel hex file containing an unencrypted flash image.");
             FlasherInterface.WriteLine("   An .img file can be sent to the bootloader, and can be created by this");
             FlasherInterface.WriteLine("       tool from a hex file.");
             FlasherInterface.WriteLine("   At least one of .hex or .img must appear, or there is nothing to do.");
             FlasherInterface.WriteLine("   If the bootloader is using encrypted images, and you want to convert a ");
-            FlasherInterface.WriteLine("       hex to an encrypted imge, a key file must appear with the same key as");
+            FlasherInterface.WriteLine("       hex to an encrypted image, a key file must appear with the same key as");
             FlasherInterface.WriteLine("       the bootloader.");
             FlasherInterface.WriteLine("   A key file is a text file containing eight 32-bit integers, encoded in hex,");
             FlasherInterface.WriteLine("       space separated.");
