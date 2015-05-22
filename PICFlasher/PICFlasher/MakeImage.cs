@@ -1,4 +1,29 @@
-﻿using System;
+﻿#if false
+The MIT License (MIT)
+
+Copyright (c) 2015 Hypnocube, LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Code written by Chris Lomont, 2015
+#endif
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -112,7 +137,7 @@ namespace Hypnocube.PICFlasher
         /// <param name="picDef"></param>
         /// <param name="flashBlocks"></param>
         /// <returns></returns>
-        private Image PackImage(PicDefs.PicDef picDef, List<FlashBlock> flashBlocks)
+        private Image PackImage(PicDefs.PicDef picDef, IEnumerable<FlashBlock> flashBlocks)
         {
 
             var image = new Image{PicDef = picDef};
@@ -144,9 +169,11 @@ namespace Hypnocube.PICFlasher
         /// updates address for next pass
         /// Returns a block
         /// </summary>
+        /// <param name="picDef"></param>
         /// <param name="address"></param>
         /// <param name="flashBlock"></param>
         /// <param name="payloadLength"></param>
+        /// <param name="cryptoRng"></param>
         /// <returns></returns>
         byte [] CreateBlock(
             RNGCryptoServiceProvider cryptoRng, 
@@ -290,7 +317,7 @@ namespace Hypnocube.PICFlasher
             {
                 Array.Copy(data, 0, buffer, 3, data.Length); // copy data
                 WriteBigEndian(buffer, (uint) (buffer.Length - 4 - 2 - 4), address, 4);
-                WriteBigEndian(buffer, (uint) (buffer.Length - 4 - 2), (uint) (dataLength), 2); // for testing
+                WriteBigEndian(buffer, (uint) (buffer.Length - 4 - 2), dataLength, 2); // for testing
 
                 // compute CRC32k
                 var crc32 = CRC32K.Compute(buffer, 3, buffer.Length - 3 - 4);
@@ -406,7 +433,7 @@ namespace Hypnocube.PICFlasher
                 WriteBigEndian(key, i*4, userKey[i], 4);
 
             encryptor.SetKeyAndInitializationVector(key, initializationVector);
-            var numberOfRounds = 20;
+            const int numberOfRounds = 20;
 
             // create a crypto block, must be first in image
             var cryptoBlock = MakeCryptoBlock(initializationVector);

@@ -1,4 +1,29 @@
-﻿using System;
+﻿#if false
+The MIT License (MIT)
+
+Copyright (c) 2015 Hypnocube, LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Code written by Chris Lomont, 2015
+#endif
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -264,10 +289,7 @@ namespace Hypnocube.PICFlasher
 
                 if (state == FlasherState.AutoInfoPending)
                 {
-                    if (success)
-                        state = FlasherState.AutoImageStart; // next stage
-                    else
-                        state = FlasherState.Connected; // drop back to here
+                    state = success ? FlasherState.AutoImageStart : FlasherState.Connected;
                 }
 
                 return true; // remove on execution
@@ -292,10 +314,7 @@ namespace Hypnocube.PICFlasher
                 var hexTime = new FileInfo(hexFilename).CreationTime;
                 var imgTime = new FileInfo(imgFilename).CreationTime;
 
-                if (hexTime < imgTime)
-                    success = LoadImage(imgFilename);
-                else
-                    success = CreateImageFromHex(hexFilename, imgFilename, key);
+                success = hexTime < imgTime ? LoadImage(imgFilename) : CreateImageFromHex(hexFilename, imgFilename, key);
             }
             else if (hexExists)
             {
@@ -312,10 +331,7 @@ namespace Hypnocube.PICFlasher
 
             if (state == FlasherState.AutoImagePending)
             {
-                if (success)
-                    state = FlasherState.AutoEraseStart;
-                else
-                    state = FlasherState.Connected; // jump back to this
+                state = success ? FlasherState.AutoEraseStart : FlasherState.Connected;
             }
         }
 
@@ -365,7 +381,7 @@ namespace Hypnocube.PICFlasher
         /// Text description of ACK messages, must match
         /// bootloader code in PIC
         /// </summary>
-        private string[] ackMsg =
+        private readonly string[] ackMsg =
         {
             "ACK_PAGE_ERASED              = 0x00",
             "ACK_PAGE_PROTECTED           = 0x01",
@@ -384,7 +400,7 @@ namespace Hypnocube.PICFlasher
         /// Text description of NACK messages, must match
         /// bootloader code in PIC
         /// </summary>
-        private string[] nackMsg =
+        private readonly string[] nackMsg =
         {
 
             // write problems
@@ -412,7 +428,7 @@ namespace Hypnocube.PICFlasher
         /// <summary>
         /// Lines received from other end
         /// </summary>
-        List<string> lines = new List<string>();
+        readonly List<string> lines = new List<string>();
 
         /// <summary>
         /// Current line being read
@@ -530,10 +546,10 @@ namespace Hypnocube.PICFlasher
         int bootLength = 0;
 
 
-        private bool allowOverwriteBootFlash = true;
-        private bool allowOverwriteConfiguration = false;
+        private const bool allowOverwriteBootFlash = true;
+        private const bool allowOverwriteConfiguration = false;
 
-         
+
         /// <summary>
         /// Function that clamps data to a set of legal addresses
         /// Returns new start address and modified data
@@ -547,8 +563,10 @@ namespace Hypnocube.PICFlasher
             var tempAddress = address;
 
             // start address, length memory regions allowed to overwrite
-            var allowedRegions = new List<Tuple<long, long>>();
-            allowedRegions.Add(new Tuple<long, long>(picDetails.FlashStart+bootLength, picDetails.FlashSize-bootLength));
+            var allowedRegions = new List<Tuple<long, long>>
+            {
+                new Tuple<long, long>(picDetails.FlashStart + bootLength, picDetails.FlashSize - bootLength)
+            };
 
             if (allowOverwriteBootFlash)
             {
@@ -758,7 +776,7 @@ namespace Hypnocube.PICFlasher
 
         private void WriteByte(byte data)
         {
-            var buffer = new byte[] { data };
+            var buffer = new[] { data };
             serialManager.WriteBytes(buffer);
         }
 
@@ -865,7 +883,7 @@ namespace Hypnocube.PICFlasher
         /// A list of things to do when text seen.
         /// If added function returns true, is removed from list
         /// </summary>
-        private List<Tuple<string, Func<string,bool>>> lineActions = new List<Tuple<string, Func<string, bool>>>();
+        private readonly List<Tuple<string, Func<string,bool>>> lineActions = new List<Tuple<string, Func<string, bool>>>();
 
         void WatchForLine(string line, Func<string,bool> lineAction)
         {
@@ -875,7 +893,7 @@ namespace Hypnocube.PICFlasher
         /// <summary>
         /// A list of things to do on ack or nack
         /// </summary>
-        private List<Func<bool>> ackNackActions = new List<Func<bool>>();
+        private readonly List<Func<bool>> ackNackActions = new List<Func<bool>>();
         
         /// <summary>
         /// Add function to execute on each ACK or NACK
